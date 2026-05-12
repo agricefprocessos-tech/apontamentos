@@ -158,8 +158,10 @@ label:first-child { margin-top: 0; }
 </head>
 <body>
 
+<!-- LOADING -->
 <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
 
+<!-- HEADER -->
 <div class="header">
   <div class="header-logo">⚙ AGRICEF</div>
   <div class="header-right">
@@ -168,11 +170,15 @@ label:first-child { margin-top: 0; }
   </div>
 </div>
 
+<!-- ALERTA POKA-YOKE -->
 <div class="alert-pokayoke" id="alertaAberto">
   <div class="alert-title">⚠ Apontamento em aberto</div>
   <div class="alert-body" id="alertaAbertoTexto"></div>
 </div>
 
+<!-- ============================================================ -->
+<!-- PÁGINA: FORMULÁRIO                                           -->
+<!-- ============================================================ -->
 <div class="content" id="formContent">
 
   <div class="step-indicator">
@@ -182,6 +188,7 @@ label:first-child { margin-top: 0; }
     <span class="step-label" id="stepLabel">Identificação</span>
   </div>
 
+  <!-- STEP 1 -->
   <div id="step1">
     <div class="card">
       <div class="section-title">Operador</div>
@@ -193,6 +200,7 @@ label:first-child { margin-top: 0; }
     <button class="btn-submit" onclick="irStep2()">Continuar →</button>
   </div>
 
+  <!-- STEP 2 -->
   <div id="step2" class="section-block">
 
     <div class="card">
@@ -207,6 +215,7 @@ label:first-child { margin-top: 0; }
       </div>
     </div>
 
+    <!-- BLOCO PRODUÇÃO -->
     <div class="card section-block" id="blocoProducao">
       <div class="section-title">Operação de produção</div>
       <div class="op-grid" id="opGrid"></div>
@@ -221,6 +230,7 @@ label:first-child { margin-top: 0; }
       <input type="text" id="obs1" placeholder="Opcional">
     </div>
 
+    <!-- BLOCO RETRABALHO -->
     <div class="card section-block" id="blocoRetrabalho">
       <div class="section-title">Tipo de retrabalho</div>
       <div class="tipo-grid">
@@ -238,9 +248,11 @@ label:first-child { margin-top: 0; }
       </div>
     </div>
 
+    <!-- BLOCO PARADA -->
     <div class="card section-block" id="blocoParada">
       <div class="section-title">Tipo de parada</div>
       <div class="parada-grid" id="paradaGrid"></div>
+      <!-- Setup dentro de parada -->
       <div class="section-block" id="blocoSetup">
         <div class="divider"></div>
         <div class="section-title">Operação de set-up</div>
@@ -255,6 +267,7 @@ label:first-child { margin-top: 0; }
       </div>
     </div>
 
+    <!-- BLOCO LOTE (fechamento) -->
     <div class="card section-block" id="blocoLote">
       <div class="section-title">Apontamento em lote</div>
       <div class="info-box">Adicione os Nº de série produzidos neste turno. Um registro será criado para cada item.</div>
@@ -271,6 +284,7 @@ label:first-child { margin-top: 0; }
 
 </div>
 
+<!-- SUCCESS -->
 <div class="success-screen" id="successScreen">
   <div class="success-icon">✅</div>
   <div class="success-title">Registrado!</div>
@@ -278,8 +292,12 @@ label:first-child { margin-top: 0; }
   <button class="btn-submit" style="max-width:280px" onclick="novoApontamento()">Novo apontamento</button>
 </div>
 
+<!-- ============================================================ -->
+<!-- PÁGINA: ADMIN                                                -->
+<!-- ============================================================ -->
 <div class="content page" id="pageAdmin" style="display:none">
 
+  <!-- LOCK -->
   <div id="adminLock">
     <div class="admin-lock">
       <div class="section-title">Área do líder — PIN de acesso</div>
@@ -302,6 +320,7 @@ label:first-child { margin-top: 0; }
     </div>
   </div>
 
+  <!-- CONTEÚDO ADMIN (pós-autenticação) -->
   <div id="adminContent" style="display:none">
     <div class="admin-header">
       <div style="flex:1">
@@ -316,6 +335,7 @@ label:first-child { margin-top: 0; }
       <button class="admin-tab" onclick="switchTab('series')">Séries</button>
     </div>
 
+    <!-- TAB OPERADORES -->
     <div id="tabOperadores">
       <div class="card">
         <div class="section-title">Adicionar operador</div>
@@ -335,6 +355,7 @@ label:first-child { margin-top: 0; }
       <div id="listaOperadores"></div>
     </div>
 
+    <!-- TAB SÉRIES -->
     <div id="tabSeries" style="display:none">
       <div class="card">
         <div class="section-title">Adicionar nº de série</div>
@@ -359,6 +380,7 @@ label:first-child { margin-top: 0; }
   </div>
 </div>
 
+<!-- TOAST -->
 <div class="toast" id="toast"></div>
 
 <script>
@@ -667,7 +689,7 @@ async function enviarApontamento() {
   };
 
   try {
-    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(payload) });
+    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     const data = await res.json();
     if (data.success) mostrarSucesso(payload);
     else { showToast('Erro: ' + data.message, 'error'); btn.disabled = false; btn.textContent = 'Registrar apontamento'; }
@@ -731,7 +753,7 @@ async function sincronizarFila() {
   if (!fila.length) return;
   const nova = [];
   for (const item of fila) {
-    try { const r = await fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item)}); const d = await r.json(); if(!d.success) nova.push(item); }
+    try { const r = await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)}); const d = await r.json(); if(!d.success) nova.push(item); }
     catch { nova.push(item); }
   }
   localStorage.setItem('agricef_fila', JSON.stringify(nova));
@@ -812,7 +834,7 @@ async function adicionarOperador() {
   if (!cod || !nome) { showToast('Preencha código e nome', 'error'); return; }
   setLoading(true);
   try {
-    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({action:'salvarOperador', codigo:cod, nome}) });
+    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'salvarOperador', codigo:cod, nome}) });
     const data = await res.json();
     if (data.success) {
       const existe = state.operadores.find(o => o.codigo === cod);
@@ -829,7 +851,7 @@ async function removerOperador(codigo) {
   if (!confirm('Remover operador ' + codigo + '?')) return;
   setLoading(true);
   try {
-    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({action:'removerOperador', codigo}) });
+    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'removerOperador', codigo}) });
     const data = await res.json();
     if (data.success) {
       state.operadores = state.operadores.filter(o => o.codigo !== codigo);
@@ -846,7 +868,7 @@ async function adicionarSerie() {
   if (!nr || !impl || !cli) { showToast('Preencha todos os campos', 'error'); return; }
   setLoading(true);
   try {
-    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({action:'salvarSerie', nrSerie:nr, implemento:impl, cliente:cli}) });
+    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'salvarSerie', nrSerie:nr, implemento:impl, cliente:cli}) });
     const data = await res.json();
     if (data.success) {
       const existe = state.series.find(s => s.nrSerie === nr);
@@ -862,7 +884,7 @@ async function removerSerie(nrSerie) {
   if (!confirm('Remover série ' + nrSerie + '?')) return;
   setLoading(true);
   try {
-    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({action:'removerSerie', nrSerie}) });
+    const res  = await fetch(API, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'removerSerie', nrSerie}) });
     const data = await res.json();
     if (data.success) {
       state.series = state.series.filter(s => s.nrSerie !== nrSerie);
