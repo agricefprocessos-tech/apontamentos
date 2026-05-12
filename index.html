@@ -509,13 +509,9 @@ async function irStep2() {
   state.implemento  = imp.implemento;
   state.cliente     = imp.cliente;
 
-  // MODIFICAÇÃO: Ativa o carregamento e espera a resposta do servidor
-  setLoading(true);
-  await verificarAbertoAberto();
-  setLoading(false);
-
   mostrar('step2'); esconder('step1');
   atualizarSteps(2);
+  verificarAbertoAberto();
 }
 
 function voltarStep1() {
@@ -681,12 +677,6 @@ async function enviarApontamento() {
 }
 
 function validarFormulario() {
-  // MODIFICAÇÃO: Dupla segurança para impedir o envio se existir apontamento aberto
-  if (state.abertoAberto && ['ABERTURA','INICIO_RETRABALHO','INICIO_PARADA'].includes(state.tipo)) { 
-    showToast('Existe um apontamento em aberto. Feche-o primeiro.', 'error'); 
-    return false; 
-  }
-
   if (!state.tipo) { showToast('Selecione o tipo de apontamento', 'error'); return false; }
   if (['ABERTURA','FECHAMENTO'].includes(state.tipo)) {
     if (!state.operacao) { showToast('Selecione a operação', 'error'); return false; }
