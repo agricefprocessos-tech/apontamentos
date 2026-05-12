@@ -689,10 +689,7 @@ async function enviarApontamento() {
   };
 
   try {
-    const form = new FormData();
-    form.append('payload', JSON.stringify(payload));
-    const res  = await fetch(API, { method:'POST', body: form });
-    const data = await res.json();
+    const data = await postAPI(payload);
     if (data.success) mostrarSucesso(payload);
     else { showToast('Erro: ' + data.message, 'error'); btn.disabled = false; btn.textContent = 'Registrar apontamento'; }
   } catch (e) {
@@ -914,10 +911,11 @@ function showToast(msg, type='') {
 
 
 // ===================== API HELPER =====================
+// Apps Script não aceita POST com CORS de domínio externo.
+// Solução: envia tudo via GET com payload encodado na URL (doGet no script).
 async function postAPI(obj) {
-  const form = new FormData();
-  form.append('payload', JSON.stringify(obj));
-  const res = await fetch(API, { method: 'POST', body: form });
+  const params = new URLSearchParams({ payload: JSON.stringify(obj) });
+  const res = await fetch(API + '?' + params.toString());
   return res.json();
 }
 
