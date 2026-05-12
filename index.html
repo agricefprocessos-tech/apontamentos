@@ -668,13 +668,17 @@ async function enviarApontamento() {
   setLoading(true);
 
   const now  = new Date();
-  const hora = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  const pad  = n => String(n).padStart(2,'0');
+  const hora = pad(now.getHours()) + ':' + pad(now.getMinutes());
+  // Carimbo no formato dd/MM/yyyy HH:mm:ss já no fuso local do browser
+  const carimbo = pad(now.getDate()) + '/' + pad(now.getMonth()+1) + '/' + now.getFullYear()
+    + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
   const qtdEl = document.getElementById('quantidade');
   const qtdVal = qtdEl ? qtdEl.value : '';
   const qtd = qtdVal === '' ? null : Number(qtdVal);
 
   const payload = {
-    timestamp: now.toISOString(), hora,
+    timestamp: carimbo, hora,
     operador: state.operador, operadorNome: state.operadorNome,
     nrSerie: state.nrSerie, implemento: state.implemento, cliente: state.cliente,
     tipoApontamento: state.tipo,
