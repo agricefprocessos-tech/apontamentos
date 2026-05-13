@@ -9,159 +9,160 @@
 <title>AGRICEF — Apontamento</title>
 <style>
 :root {
-  --bg: #0f0f1a;
-  --surface: #1a1a2e;
-  --surface2: #232338;
-  --border: #2e2e4a;
-  --accent: #4f8ef7;
-  --green: #2ecc71;
-  --amber: #f39c12;
-  --red: #e74c3c;
-  --text: #f0f0ff;
-  --text2: #8888aa;
-  --radius: 14px;
-  --radius-sm: 8px;
+  --bg:#0f0f1a; --surface:#1a1a2e; --surface2:#232338; --border:#2e2e4a;
+  --accent:#4f8ef7; --green:#2ecc71; --amber:#f39c12; --red:#e74c3c;
+  --text:#f0f0ff; --text2:#8888aa; --radius:14px; --radius-sm:8px;
 }
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap');
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-body { font-family: 'DM Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; max-width: 480px; margin: 0 auto; }
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:480px;margin:0 auto}
 
 /* HEADER */
-.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
-.header-logo { font-size: 13px; font-weight: 700; letter-spacing: .12em; color: var(--accent); text-transform: uppercase; }
-.header-right { display: flex; align-items: center; gap: 12px; }
-.header-time { font-family: 'DM Mono', monospace; font-size: 13px; color: var(--text2); }
-.btn-admin { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--text2); font-size: 11px; font-weight: 600; padding: 4px 10px; cursor: pointer; letter-spacing: .06em; text-transform: uppercase; transition: all .2s; }
-.btn-admin:hover { border-color: var(--accent); color: var(--accent); }
-
-/* ALERT */
-.alert-pokayoke { background: #2a1a0a; border-left: 4px solid var(--amber); padding: 12px 16px; margin: 12px 16px; border-radius: var(--radius-sm); display: none; }
-.alert-pokayoke.visible { display: block; }
-.alert-title { font-size: 13px; font-weight: 600; color: var(--amber); margin-bottom: 4px; }
-.alert-body { font-size: 12px; color: #c87d3a; line-height: 1.5; }
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.header-logo{font-size:13px;font-weight:700;letter-spacing:.12em;color:var(--accent);text-transform:uppercase}
+.header-right{display:flex;align-items:center;gap:12px}
+.header-time{font-family:'DM Mono',monospace;font-size:13px;color:var(--text2)}
+.btn-admin{background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;transition:all .2s}
+.btn-admin:hover{border-color:var(--accent);color:var(--accent)}
 
 /* CONTENT */
-.content { padding: 16px; padding-bottom: 40px; }
-.page { display: none; }
-.page.active { display: block; }
+.content{padding:16px;padding-bottom:40px}
+.page{display:none}
+.page.active{display:block}
+.section-block{display:none}
+.section-block.visible{display:block}
 
 /* STEP */
-.step-indicator { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; }
-.step-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); transition: all .3s; }
-.step-dot.active { background: var(--accent); width: 24px; border-radius: 4px; }
-.step-dot.done { background: var(--green); }
-.step-label { font-size: 12px; color: var(--text2); margin-left: 4px; }
+.step-indicator{display:flex;align-items:center;gap:6px;margin-bottom:20px}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--border);transition:all .3s}
+.step-dot.active{background:var(--accent);width:24px;border-radius:4px}
+.step-dot.done{background:var(--green)}
+.step-label{font-size:12px;color:var(--text2);margin-left:4px}
 
 /* CARDS */
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
-.section-title { font-size: 11px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--text2); margin-bottom: 10px; }
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.section-title{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text2);margin-bottom:10px}
+.divider{height:1px;background:var(--border);margin:16px 0}
 
-/* FORM ELEMENTS */
-select, input[type="text"], input[type="number"], input[type="password"], textarea {
-  width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  color: var(--text); font-family: 'DM Sans', system-ui, sans-serif; font-size: 15px; padding: 12px 14px;
-  appearance: none; -webkit-appearance: none; outline: none; transition: border-color .2s;
-}
-select:focus, input:focus, textarea:focus { border-color: var(--accent); }
-select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888aa' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px; }
-select option { background: #1a1a2e; }
-input[type="number"] { -moz-appearance: textfield; }
-input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; }
-label { display: block; font-size: 12px; font-weight: 500; color: var(--text2); margin-bottom: 6px; margin-top: 12px; }
-label:first-child { margin-top: 0; }
-.field-required::after { content: ' *'; color: var(--accent); }
+/* ALERTA ABERTO */
+.alert-aberto{background:#1a120a;border:1.5px solid var(--amber);border-radius:var(--radius);padding:16px;margin-bottom:12px;display:none}
+.alert-aberto.visible{display:block}
+.alert-aberto-title{font-size:13px;font-weight:700;color:var(--amber);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.alert-aberto-info{font-size:13px;color:#c87d3a;line-height:1.7;margin-bottom:12px}
+.alert-aberto-info strong{color:var(--text);font-weight:600}
+.btn-fechar-aberto{width:100%;background:var(--amber);color:#000;font-family:'DM Sans',system-ui,sans-serif;font-size:14px;font-weight:700;border:none;border-radius:var(--radius-sm);padding:12px;cursor:pointer;transition:all .2s}
+.btn-fechar-aberto:active{opacity:.85;transform:scale(.98)}
+
+/* FORM */
+select,input[type="text"],input[type="number"],input[type="password"],textarea{
+  width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);
+  color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:15px;padding:12px 14px;
+  appearance:none;-webkit-appearance:none;outline:none;transition:border-color .2s}
+select:focus,input:focus,textarea:focus{border-color:var(--accent)}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888aa' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
+select option{background:#1a1a2e}
+input[type="number"]{-moz-appearance:textfield}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none}
+label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px;margin-top:12px}
+label:first-child{margin-top:0}
+.field-required::after{content:' *';color:var(--accent)}
+
+/* READONLY */
+.field-readonly{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:15px;color:var(--text2);font-family:'DM Mono',monospace}
+.field-readonly.highlight{color:var(--text);border-color:var(--accent)}
 
 /* TIPO BUTTONS */
-.tipo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.tipo-btn { background: var(--surface2); border: 1.5px solid var(--border); border-radius: var(--radius-sm); color: var(--text2); font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; font-weight: 500; padding: 12px 8px; text-align: center; cursor: pointer; transition: all .2s; line-height: 1.3; }
-.tipo-btn:active { transform: scale(.97); }
-.tipo-btn.sel-blue  { border-color: var(--accent); color: var(--text); background: rgba(79,142,247,.12); }
-.tipo-btn.sel-green { border-color: var(--green); color: var(--green); background: rgba(46,204,113,.1); }
-.tipo-btn.sel-amber { border-color: var(--amber); color: var(--amber); background: rgba(243,156,18,.1); }
-.tipo-btn.sel-red   { border-color: var(--red);   color: var(--red);   background: rgba(231,76,60,.1); }
+.tipo-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tipo-btn{background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;font-weight:500;padding:12px 8px;text-align:center;cursor:pointer;transition:all .2s;line-height:1.3}
+.tipo-btn:active{transform:scale(.97)}
+.tipo-btn.sel-blue{border-color:var(--accent);color:var(--text);background:rgba(79,142,247,.12)}
+.tipo-btn.sel-green{border-color:var(--green);color:var(--green);background:rgba(46,204,113,.1)}
+.tipo-btn.sel-amber{border-color:var(--amber);color:var(--amber);background:rgba(243,156,18,.1)}
+.tipo-btn.sel-red{border-color:var(--red);color:var(--red);background:rgba(231,76,60,.1)}
+.tipo-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
 
 /* OP BUTTONS */
-.op-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.op-btn { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text2); font-family: 'DM Sans', system-ui, sans-serif; font-size: 12px; font-weight: 500; padding: 10px 8px; text-align: left; cursor: pointer; transition: all .2s; display: flex; flex-direction: column; gap: 2px; }
-.op-btn .op-code { font-family: 'DM Mono', monospace; font-size: 10px; }
-.op-btn .op-name { font-size: 13px; color: var(--text); }
-.op-btn.selected { border-color: var(--accent); background: rgba(79,142,247,.1); }
-.op-btn.selected .op-name { color: var(--accent); }
-.op-btn:active { transform: scale(.97); }
+.op-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.op-btn{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;font-weight:500;padding:10px 8px;text-align:left;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;gap:2px}
+.op-btn .op-code{font-family:'DM Mono',monospace;font-size:10px}
+.op-btn .op-name{font-size:13px;color:var(--text)}
+.op-btn.selected{border-color:var(--accent);background:rgba(79,142,247,.1)}
+.op-btn.selected .op-name{color:var(--accent)}
+.op-btn:active{transform:scale(.97)}
 
-/* PARADA BUTTONS */
-.parada-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.parada-btn { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Sans', system-ui, sans-serif; font-size: 12px; font-weight: 500; padding: 10px; text-align: left; cursor: pointer; transition: all .2s; line-height: 1.4; }
-.parada-btn.selected { border-color: var(--amber); background: rgba(243,156,18,.1); color: var(--amber); }
-.parada-btn:active { transform: scale(.97); }
+/* PARADA */
+.parada-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.parada-btn{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;font-weight:500;padding:10px;text-align:left;cursor:pointer;transition:all .2s;line-height:1.4}
+.parada-btn.selected{border-color:var(--amber);background:rgba(243,156,18,.1);color:var(--amber)}
+.parada-btn:active{transform:scale(.97)}
 
-/* BUTTONS */
-.btn-submit { width: 100%; background: var(--accent); color: #fff; font-family: 'DM Sans', system-ui, sans-serif; font-size: 16px; font-weight: 700; border: none; border-radius: var(--radius); padding: 16px; cursor: pointer; transition: all .2s; margin-top: 8px; letter-spacing: .02em; }
-.btn-submit:active { transform: scale(.98); opacity: .9; }
-.btn-submit:disabled { background: var(--border); color: var(--text2); cursor: not-allowed; transform: none; }
-.btn-secondary { width: 100%; background: transparent; color: var(--text2); font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; font-weight: 500; border: 1px solid var(--border); border-radius: var(--radius); padding: 13px; cursor: pointer; transition: all .2s; margin-top: 8px; }
-.btn-secondary:active { background: var(--surface2); }
-.btn-danger { background: rgba(231,76,60,.15); color: var(--red); border: 1px solid rgba(231,76,60,.3); border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .2s; }
-.btn-danger:active { background: rgba(231,76,60,.25); }
-
-/* SECTION BLOCK */
-.section-block { display: none; }
-.section-block.visible { display: block; }
-.divider { height: 1px; background: var(--border); margin: 16px 0; }
+/* QUANTIDADE */
+.qtd-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:0}
+.qtd-label{font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em}
+.qtd-saldo{background:rgba(46,204,113,.1);border:1px solid rgba(46,204,113,.3);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:var(--green);text-align:center;margin-top:8px;display:none}
+.qtd-saldo.visible{display:block}
 
 /* LOTE */
-.lote-item { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
-.lote-item span { font-size: 13px; color: var(--text); font-family: 'DM Mono', monospace; }
-.lote-remove { background: none; border: none; color: var(--red); font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1; }
-.lote-add-row { display: flex; gap: 8px; margin-top: 8px; }
-.btn-add { background: var(--surface2); border: 1px solid var(--accent); border-radius: var(--radius-sm); color: var(--accent); font-size: 22px; font-weight: 300; padding: 0 16px; cursor: pointer; transition: all .2s; }
-.btn-add:active { background: rgba(79,142,247,.1); }
+.lote-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.lote-item span{font-size:13px;color:var(--text);font-family:'DM Mono',monospace}
+.lote-remove{background:none;border:none;color:var(--red);font-size:20px;cursor:pointer;padding:0 4px;line-height:1}
+.lote-add-row{display:flex;gap:8px;margin-top:8px}
+.btn-add{background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius-sm);color:var(--accent);font-size:22px;font-weight:300;padding:0 16px;cursor:pointer;transition:all .2s}
+.btn-add:active{background:rgba(79,142,247,.1)}
+
+/* BUTTONS */
+.btn-submit{width:100%;background:var(--accent);color:#fff;font-family:'DM Sans',system-ui,sans-serif;font-size:16px;font-weight:700;border:none;border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s;margin-top:8px;letter-spacing:.02em}
+.btn-submit:active{transform:scale(.98);opacity:.9}
+.btn-submit:disabled{background:var(--border);color:var(--text2);cursor:not-allowed;transform:none}
+.btn-secondary{width:100%;background:transparent;color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:14px;font-weight:500;border:1px solid var(--border);border-radius:var(--radius);padding:13px;cursor:pointer;transition:all .2s;margin-top:8px}
+.btn-secondary:active{background:var(--surface2)}
+.btn-danger{background:rgba(231,76,60,.15);color:var(--red);border:1px solid rgba(231,76,60,.3);border-radius:var(--radius-sm);padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-danger:active{background:rgba(231,76,60,.25)}
+
+/* INFO BOX */
+.info-box{background:var(--surface2);border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:var(--text2);line-height:1.6;margin-top:8px}
 
 /* SUCCESS */
-.success-screen { display: none; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; text-align: center; padding: 40px 20px; }
-.success-screen.visible { display: flex; }
-.success-icon { font-size: 64px; margin-bottom: 20px; }
-.success-title { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
-.success-sub { font-size: 14px; color: var(--text2); margin-bottom: 32px; line-height: 1.5; }
-
-/* TOAST */
-.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 10px 20px; font-size: 13px; color: var(--text); z-index: 999; transition: transform .3s ease; white-space: nowrap; pointer-events: none; }
-.toast.show { transform: translateX(-50%) translateY(0); }
-.toast.error   { border-color: var(--red);   color: var(--red);   }
-.toast.success { border-color: var(--green); color: var(--green); }
+.success-screen{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:40px 20px}
+.success-screen.visible{display:flex}
+.success-icon{font-size:64px;margin-bottom:20px}
+.success-title{font-size:22px;font-weight:700;margin-bottom:8px}
+.success-sub{font-size:14px;color:var(--text2);margin-bottom:32px;line-height:1.6}
 
 /* ADMIN */
-.admin-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.admin-header h2 { font-size: 16px; font-weight: 600; }
-.admin-tabs { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 16px; }
-.admin-tab { flex: 1; background: var(--surface2); border: none; color: var(--text2); font-family: 'DM Sans', system-ui, sans-serif; font-size: 13px; font-weight: 500; padding: 10px; cursor: pointer; transition: all .2s; }
-.admin-tab.active { background: var(--accent); color: #fff; }
-.cadastro-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.cadastro-item-info { flex: 1; min-width: 0; }
-.cadastro-item-code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text2); }
-.cadastro-item-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.form-row { display: flex; gap: 8px; }
-.form-row > * { flex: 1; }
-.admin-lock { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 50vh; gap: 16px; }
-.admin-lock p { font-size: 14px; color: var(--text2); text-align: center; }
-.pin-display { font-family: 'DM Mono', monospace; font-size: 32px; letter-spacing: .3em; color: var(--accent); min-height: 48px; text-align: center; }
-.pin-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: 240px; }
-.pin-key { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-family: 'DM Sans', system-ui, sans-serif; font-size: 20px; font-weight: 500; padding: 16px; cursor: pointer; transition: all .15s; text-align: center; }
-.pin-key:active { background: var(--surface); transform: scale(.95); }
-.pin-key.del { color: var(--red); font-size: 16px; }
-.loading-overlay { position: fixed; inset: 0; background: rgba(15,15,26,.7); display: flex; align-items: center; justify-content: center; z-index: 200; display: none; }
-.loading-overlay.visible { display: flex; }
-.spinner { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.info-box { background: var(--surface2); border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12px; color: var(--text2); line-height: 1.6; margin-top: 8px; }
+.admin-tabs{display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:16px}
+.admin-tab{flex:1;background:var(--surface2);border:none;color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;font-weight:500;padding:10px;cursor:pointer;transition:all .2s}
+.admin-tab.active{background:var(--accent);color:#fff}
+.cadastro-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cadastro-item-info{flex:1;min-width:0}
+.cadastro-item-code{font-family:'DM Mono',monospace;font-size:11px;color:var(--text2)}
+.cadastro-item-name{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.form-row{display:flex;gap:8px}
+.form-row > *{flex:1}
+.admin-lock{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;gap:16px}
+.pin-display{font-family:'DM Mono',monospace;font-size:32px;letter-spacing:.3em;color:var(--accent);min-height:48px;text-align:center}
+.pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:240px}
+.pin-key{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:20px;font-weight:500;padding:16px;cursor:pointer;transition:all .15s;text-align:center}
+.pin-key:active{background:var(--surface);transform:scale(.95)}
+.pin-key.del{color:var(--red);font-size:16px}
+
+/* LOADING */
+.loading-overlay{position:fixed;inset:0;background:rgba(15,15,26,.7);display:none;align-items:center;justify-content:center;z-index:200}
+.loading-overlay.visible{display:flex}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:10px 20px;font-size:13px;color:var(--text);z-index:999;transition:transform .3s ease;white-space:nowrap;pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.error{border-color:var(--red);color:var(--red)}
+.toast.success{border-color:var(--green);color:var(--green)}
 </style>
 </head>
 <body>
 
-<!-- LOADING -->
 <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
 
-<!-- HEADER -->
 <div class="header">
   <div class="header-logo">⚙ AGRICEF</div>
   <div class="header-right">
@@ -170,14 +171,8 @@ label:first-child { margin-top: 0; }
   </div>
 </div>
 
-<!-- ALERTA POKA-YOKE -->
-<div class="alert-pokayoke" id="alertaAberto">
-  <div class="alert-title">⚠ Apontamento em aberto</div>
-  <div class="alert-body" id="alertaAbertoTexto"></div>
-</div>
-
 <!-- ============================================================ -->
-<!-- PÁGINA: FORMULÁRIO                                           -->
+<!-- FORMULÁRIO                                                   -->
 <!-- ============================================================ -->
 <div class="content" id="formContent">
 
@@ -193,11 +188,21 @@ label:first-child { margin-top: 0; }
     <div class="card">
       <div class="section-title">Operador</div>
       <label class="field-required">Nome do operador</label>
-      <select id="operador"><option value="">Carregando...</option></select>
+      <select id="operador" onchange="onOperadorChange()"><option value="">Carregando...</option></select>
       <label class="field-required">Nº Série / Implemento / Cliente</label>
-      <select id="implemento"><option value="">Carregando...</option></select>
+      <select id="implemento" onchange="onImplementoChange()"><option value="">Carregando...</option></select>
     </div>
-    <button class="btn-submit" onclick="irStep2()">Continuar →</button>
+
+    <!-- ALERTA POKA-YOKE: apontamento em aberto -->
+    <div class="alert-aberto" id="alertaAberto">
+      <div class="alert-aberto-title">⚠ Apontamento em aberto</div>
+      <div class="alert-aberto-info" id="alertaAbertoInfo"></div>
+      <button class="btn-fechar-aberto" onclick="iniciarFechamentoRapido()">
+        Fechar este apontamento agora →
+      </button>
+    </div>
+
+    <button class="btn-submit" onclick="irStep2()" id="btnContinuar">Continuar →</button>
   </div>
 
   <!-- STEP 2 -->
@@ -215,16 +220,53 @@ label:first-child { margin-top: 0; }
       </div>
     </div>
 
-    <!-- BLOCO PRODUÇÃO -->
+    <!-- BLOCO FECHAMENTO INTELIGENTE (pré-preenchido) -->
+    <div class="card section-block" id="blocoFechamentoInteligente">
+      <div class="section-title">Dados da abertura</div>
+      <label>Operação</label>
+      <div class="field-readonly highlight" id="fechOpLabel">—</div>
+      <label>Código do item</label>
+      <div class="field-readonly highlight" id="fechCodItemLabel">—</div>
+      <label>Implemento</label>
+      <div class="field-readonly" id="fechImplementoLabel">—</div>
+      <label>Aberto em</label>
+      <div class="field-readonly" id="fechCarimboLabel">—</div>
+      <div class="divider"></div>
+      <div class="section-title">Fechamento</div>
+      <div id="blocoQtdFechamento" class="section-block">
+        <div class="qtd-row">
+          <div>
+            <div class="qtd-label">Qtd planejada</div>
+            <div class="field-readonly" id="fechQtdPlanejadaLabel">—</div>
+          </div>
+          <div>
+            <div class="qtd-label">Qtd realizada *</div>
+            <input type="number" id="fechQuantidade" placeholder="0" min="0" step="1" inputmode="numeric" oninput="calcularSaldo()">
+          </div>
+        </div>
+        <div class="qtd-saldo" id="saldoBox"></div>
+      </div>
+      <label>Observação</label>
+      <input type="text" id="fechObs" placeholder="Opcional">
+    </div>
+
+    <!-- BLOCO PRODUÇÃO (abertura) -->
     <div class="card section-block" id="blocoProducao">
       <div class="section-title">Operação de produção</div>
       <div class="op-grid" id="opGrid"></div>
       <div class="divider"></div>
       <label class="field-required">Código do item</label>
-      <input type="text" id="codItem" placeholder="Ex: 5.001.234" oninput="validarCodItem(this.value)">
-      <div class="section-block" id="campoQtd">
-        <label id="labelQtd">Quantidade</label>
-        <input type="number" id="quantidade" placeholder="0" min="0" step="1" inputmode="numeric">
+      <input type="text" id="codItem" placeholder="Ex: 509419">
+      <div class="section-block" id="campoQtdAbertura">
+        <div class="qtd-row">
+          <div>
+            <div class="qtd-label">Qtd planejada *</div>
+            <input type="number" id="qtdPlanejada" placeholder="0" min="1" step="1" inputmode="numeric">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <div class="info-box" style="margin:0;font-size:11px">Quantidade total a produzir nesta operação</div>
+          </div>
+        </div>
       </div>
       <label>Observação</label>
       <input type="text" id="obs1" placeholder="Opcional">
@@ -252,25 +294,24 @@ label:first-child { margin-top: 0; }
     <div class="card section-block" id="blocoParada">
       <div class="section-title">Tipo de parada</div>
       <div class="parada-grid" id="paradaGrid"></div>
-      <!-- Setup dentro de parada -->
       <div class="section-block" id="blocoSetup">
         <div class="divider"></div>
         <div class="section-title">Operação de set-up</div>
         <div class="parada-grid">
-          <button class="parada-btn" onclick="selecionarSetup('PREPARAÇÃO DE MATÉRIA PRIMA')" id="setup-0">Preparação de matéria prima</button>
-          <button class="parada-btn" onclick="selecionarSetup('AJUSTE DE MÁQUINA')"           id="setup-1">Ajuste de máquina</button>
-          <button class="parada-btn" onclick="selecionarSetup('INVENTÁRIO')"                  id="setup-2">Inventário</button>
-          <button class="parada-btn" onclick="selecionarSetup('MOVIMENTAÇÃO LOGÍSTICA')"      id="setup-3">Movimentação logística</button>
+          <button class="parada-btn" onclick="selecionarSetup('PREPARAÇÃO DE MATÉRIA PRIMA')">Preparação de matéria prima</button>
+          <button class="parada-btn" onclick="selecionarSetup('AJUSTE DE MÁQUINA')">Ajuste de máquina</button>
+          <button class="parada-btn" onclick="selecionarSetup('INVENTÁRIO')">Inventário</button>
+          <button class="parada-btn" onclick="selecionarSetup('MOVIMENTAÇÃO LOGÍSTICA')">Movimentação logística</button>
         </div>
         <label>Observação</label>
         <input type="text" id="obs2" placeholder="Opcional">
       </div>
     </div>
 
-    <!-- BLOCO LOTE (fechamento) -->
+    <!-- BLOCO LOTE -->
     <div class="card section-block" id="blocoLote">
       <div class="section-title">Apontamento em lote</div>
-      <div class="info-box">Adicione os Nº de série produzidos neste turno. Um registro será criado para cada item.</div>
+      <div class="info-box">Adicione os Nº de série produzidos. Um registro será criado para cada item.</div>
       <div id="loteItens" style="margin-top:10px"></div>
       <div class="lote-add-row">
         <input type="text" id="loteInput" placeholder="Nº de série">
@@ -293,11 +334,9 @@ label:first-child { margin-top: 0; }
 </div>
 
 <!-- ============================================================ -->
-<!-- PÁGINA: ADMIN                                                -->
+<!-- ADMIN                                                        -->
 <!-- ============================================================ -->
 <div class="content page" id="pageAdmin" style="display:none">
-
-  <!-- LOCK -->
   <div id="adminLock">
     <div class="admin-lock">
       <div class="section-title">Área do líder — PIN de acesso</div>
@@ -319,81 +358,61 @@ label:first-child { margin-top: 0; }
       <button class="btn-secondary" style="max-width:200px" onclick="fecharAdmin()">Cancelar</button>
     </div>
   </div>
-
-  <!-- CONTEÚDO ADMIN (pós-autenticação) -->
   <div id="adminContent" style="display:none">
-    <div class="admin-header">
-      <div style="flex:1">
-        <div class="section-title" style="margin:0">Área do líder</div>
-        <div style="font-size:16px;font-weight:600;margin-top:2px">Gerenciar cadastros</div>
-      </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div style="flex:1"><div class="section-title" style="margin:0">Área do líder</div><div style="font-size:16px;font-weight:600;margin-top:2px">Gerenciar cadastros</div></div>
       <button class="btn-secondary" style="width:auto;padding:8px 16px;margin:0" onclick="fecharAdmin()">Sair</button>
     </div>
-
     <div class="admin-tabs">
       <button class="admin-tab active" onclick="switchTab('operadores')">Operadores</button>
       <button class="admin-tab" onclick="switchTab('series')">Séries</button>
     </div>
-
-    <!-- TAB OPERADORES -->
     <div id="tabOperadores">
       <div class="card">
         <div class="section-title">Adicionar operador</div>
         <div class="form-row">
-          <div>
-            <label>Código</label>
-            <input type="text" id="newOpCodigo" placeholder="000101">
-          </div>
-          <div style="flex:2">
-            <label>Nome completo</label>
-            <input type="text" id="newOpNome" placeholder="NOME DO OPERADOR">
-          </div>
+          <div><label>Código</label><input type="text" id="newOpCodigo" placeholder="000101"></div>
+          <div style="flex:2"><label>Nome completo</label><input type="text" id="newOpNome" placeholder="NOME DO OPERADOR"></div>
         </div>
         <button class="btn-submit" style="margin-top:12px" onclick="adicionarOperador()">Adicionar operador</button>
       </div>
       <div class="section-title">Operadores ativos</div>
       <div id="listaOperadores"></div>
     </div>
-
-    <!-- TAB SÉRIES -->
     <div id="tabSeries" style="display:none">
       <div class="card">
         <div class="section-title">Adicionar nº de série</div>
-        <label>Nº de série</label>
-        <input type="text" id="newSerNr" placeholder="22000089">
+        <label>Nº de série</label><input type="text" id="newSerNr" placeholder="22000089">
         <div class="form-row" style="margin-top:0">
-          <div>
-            <label>Implemento</label>
-            <input type="text" id="newSerImpl" placeholder="HAULER 10&quot;">
-          </div>
-          <div>
-            <label>Cliente</label>
-            <input type="text" id="newSerCli" placeholder="ATVOS">
-          </div>
+          <div><label>Implemento</label><input type="text" id="newSerImpl" placeholder='HAULER 10"'></div>
+          <div><label>Cliente</label><input type="text" id="newSerCli" placeholder="ATVOS"></div>
         </div>
         <button class="btn-submit" style="margin-top:12px" onclick="adicionarSerie()">Adicionar série</button>
       </div>
       <div class="section-title">Séries ativas</div>
       <div id="listaSeries"></div>
     </div>
-
   </div>
 </div>
 
-<!-- TOAST -->
 <div class="toast" id="toast"></div>
 
 <script>
 // ===================== CONFIG =====================
-const API = 'https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
-const PIN_ADMIN = '1234'; // altere para o PIN desejado
+const API     = 'https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
+const PIN_ADMIN = '1234';
+
+// Operações que EXIGEM quantidade
+const OPS_REQUEREM_QTD = ['0010','0020','0030','0040','0050','0060','0080'];
+// Cortar, Furar, Mont.Caldeiraria, Soldar, Lixar, Pintar, Inspecionar
 
 // ===================== ESTADO =====================
 const state = {
-  operador: '', operadorNome: '', nrSerie: '', implemento: '', cliente: '',
-  tipo: '', operacao: '', opRetrabalho: '', retrabalho: '', numRNC: '',
-  parada: '', setup: '', lote: [], abertoAberto: false,
-  operadores: [], series: [],
+  operador:'', operadorNome:'', nrSerie:'', implemento:'', cliente:'',
+  tipo:'', operacao:'', opRetrabalho:'', retrabalho:'', numRNC:'',
+  parada:'', setup:'', lote:[], abertoInfo:null,
+  modoFechamentoRapido: false,
+  operadores:[], series:[],
 };
 
 const operacoes = [
@@ -414,38 +433,44 @@ const paradas = [
 // ===================== INIT =====================
 async function init() {
   iniciarRelogio();
-  renderOpGrid('opGrid', 'selecionarOperacao');
-  renderOpGrid('opGridRetrabalho', 'selecionarOpRetrabalho');
+  renderOpGrid('opGrid','selecionarOperacao');
+  renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
   renderParadasGrid();
   await carregarCadastros();
 }
 
 function iniciarRelogio() {
-  const el = document.getElementById('relogio');
+  const el  = document.getElementById('relogio');
   const tick = () => {
     const n = new Date();
-    el.textContent = String(n.getHours()).padStart(2,'0') + ':' + String(n.getMinutes()).padStart(2,'0');
+    el.textContent = pad(n.getHours())+':'+pad(n.getMinutes());
   };
-  tick(); setInterval(tick, 30000);
+  tick(); setInterval(tick,30000);
+}
+
+const pad = n => String(n).padStart(2,'0');
+
+function carimboBrowser() {
+  const n = new Date();
+  return pad(n.getDate())+'/'+pad(n.getMonth()+1)+'/'+n.getFullYear()+
+    ' '+pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
 }
 
 // ===================== CADASTROS =====================
 async function carregarCadastros() {
   setLoading(true);
   try {
-    const res  = await fetch(API + '?action=getCadastros');
+    const res  = await fetch(API+'?action=getCadastros');
     const data = await res.json();
     if (data.success) {
       state.operadores = data.operadores;
       state.series     = data.series;
-      popularSelectOperador();
-      popularSelectImplemento();
-      renderListaAdmin();
-    }
-  } catch (e) {
-    // Fallback offline com dados hardcoded
-    usarCadastrosFallback();
-  } finally {
+    } else { usarFallback(); }
+  } catch { usarFallback(); }
+  finally {
+    popularSelectOperador();
+    popularSelectImplemento();
+    renderListaAdmin();
     setLoading(false);
   }
 }
@@ -456,7 +481,7 @@ function popularSelectOperador() {
   state.operadores.forEach(op => {
     const o = document.createElement('option');
     o.value = op.codigo;
-    o.textContent = op.codigo + ' — ' + op.nome;
+    o.textContent = op.codigo+' — '+op.nome;
     sel.appendChild(o);
   });
 }
@@ -466,124 +491,235 @@ function popularSelectImplemento() {
   sel.innerHTML = '<option value="">Selecione o implemento...</option>';
   state.series.forEach(s => {
     const o = document.createElement('option');
-    o.value = JSON.stringify({nrSerie: s.nrSerie, implemento: s.implemento, cliente: s.cliente});
-    o.textContent = s.nrSerie + ' — ' + s.implemento + ' — ' + s.cliente;
+    o.value = JSON.stringify({nrSerie:s.nrSerie, implemento:s.implemento, cliente:s.cliente});
+    o.textContent = s.nrSerie+' — '+s.implemento+' — '+s.cliente;
     sel.appendChild(o);
   });
 }
 
-function usarCadastrosFallback() {
+function usarFallback() {
   state.operadores = [
-    {codigo:'000101',nome:'ELENILTON GONÇALVES DOS SANTOS'},
-    {codigo:'000108',nome:'SIDNEI OLIVEIRA'},
-    {codigo:'000109',nome:'DANIEL DO NASCIMENTO PISNO SILVA'},
-    {codigo:'000117',nome:'RAFAEL MENDES DA SILVA'},
-    {codigo:'000119',nome:'JONAS GABRIEL SILVA SANTOS'},
-    {codigo:'000121',nome:'JOÃO PEDRO ALMEIDA FERREIRA'},
-    {codigo:'000123',nome:'ADILSON BATISTA DA SILVA FILHO'},
-    {codigo:'000128',nome:'GILMARCIO OLIVEIRA DOS SANTOS'},
-    {codigo:'000130',nome:'EDERSON LUIS CANDINHO'},
-    {codigo:'000131',nome:'MATHEUS FERREIRA DA SILVA'},
-    {codigo:'001943',nome:'CELSO RODRIGUES DE OLIVEIRA'},
-    {codigo:'003102',nome:'LUIS GUILHERME NASCIMENTO DOS SANTOS'},
-    {codigo:'003766',nome:'MATHEUS STUCHI'},
-    {codigo:'004077',nome:'PAULO JOAQUIM DE SANTANA'},
+    {codigo:'000101',nome:'ELENILTON GONÇALVES DOS SANTOS'},{codigo:'000108',nome:'SIDNEI OLIVEIRA'},
+    {codigo:'000109',nome:'DANIEL DO NASCIMENTO PISNO SILVA'},{codigo:'000117',nome:'RAFAEL MENDES DA SILVA'},
+    {codigo:'000119',nome:'JONAS GABRIEL SILVA SANTOS'},{codigo:'000121',nome:'JOÃO PEDRO ALMEIDA FERREIRA'},
+    {codigo:'000123',nome:'ADILSON BATISTA DA SILVA FILHO'},{codigo:'000128',nome:'GILMARCIO OLIVEIRA DOS SANTOS'},
+    {codigo:'000130',nome:'EDERSON LUIS CANDINHO'},{codigo:'000131',nome:'MATHEUS FERREIRA DA SILVA'},
+    {codigo:'001943',nome:'CELSO RODRIGUES DE OLIVEIRA'},{codigo:'003102',nome:'LUIS GUILHERME NASCIMENTO DOS SANTOS'},
+    {codigo:'003766',nome:'MATHEUS STUCHI'},{codigo:'004077',nome:'PAULO JOAQUIM DE SANTANA'},
     {codigo:'004223',nome:'DEIVI RODRIGO DIAS DA ROSA'},
   ];
   state.series = [
-    {nrSerie:'22000072',implemento:'HAULER 8"',cliente:'COFCO'},
-    {nrSerie:'22000073',implemento:'HAULER 10"',cliente:'SÃO MARTINHO'},
-    {nrSerie:'22000074',implemento:'HAULER 10"',cliente:'ATVOS'},
-    {nrSerie:'22000075',implemento:'HAULER 10"',cliente:'ATVOS'},
-    {nrSerie:'22000076',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEXCO'},
-    {nrSerie:'22000077',implemento:'HAULER 10"',cliente:'ATVOS'},
-    {nrSerie:'22000078',implemento:'HAULER 10"',cliente:'ATVOS'},
-    {nrSerie:'22000079',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEMONSTRAÇÃO'},
-    {nrSerie:'22000080',implemento:'HAULER 10"',cliente:'ATVOS'},
-    {nrSerie:'22000081',implemento:'HAULER 10"',cliente:'VAMOS MG'},
-    {nrSerie:'22000082',implemento:'HAULER 10"',cliente:'VAMOS MG'},
-    {nrSerie:'22000083',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEMONSTRAÇÃO'},
-    {nrSerie:'22000084',implemento:'PLANTADORA',cliente:'J. LUIZ'},
-    {nrSerie:'22000085',implemento:'IRRIGAÍ 2 LINHAS',cliente:'GERDAU'},
-    {nrSerie:'22000086',implemento:'HAULER 10"',cliente:'VAMOS RJ'},
-    {nrSerie:'22000087',implemento:'HAULER 10"',cliente:'VAMOS RJ'},
-    {nrSerie:'22000088',implemento:'HAULER 10"',cliente:'ESTOQUE'},
-    {nrSerie:'ENGENHARIA',implemento:'ENGENHARIA',cliente:'INTERNO'},
+    {nrSerie:'22000072',implemento:'HAULER 8"',cliente:'COFCO'},{nrSerie:'22000073',implemento:'HAULER 10"',cliente:'SÃO MARTINHO'},
+    {nrSerie:'22000074',implemento:'HAULER 10"',cliente:'ATVOS'},{nrSerie:'22000075',implemento:'HAULER 10"',cliente:'ATVOS'},
+    {nrSerie:'22000076',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEXCO'},{nrSerie:'22000077',implemento:'HAULER 10"',cliente:'ATVOS'},
+    {nrSerie:'22000078',implemento:'HAULER 10"',cliente:'ATVOS'},{nrSerie:'22000079',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEMONSTRAÇÃO'},
+    {nrSerie:'22000080',implemento:'HAULER 10"',cliente:'ATVOS'},{nrSerie:'22000081',implemento:'HAULER 10"',cliente:'VAMOS MG'},
+    {nrSerie:'22000082',implemento:'HAULER 10"',cliente:'VAMOS MG'},{nrSerie:'22000083',implemento:'IRRIGAÍ 3 LINHAS',cliente:'DEMONSTRAÇÃO'},
+    {nrSerie:'22000084',implemento:'PLANTADORA',cliente:'J. LUIZ'},{nrSerie:'22000085',implemento:'IRRIGAÍ 2 LINHAS',cliente:'GERDAU'},
+    {nrSerie:'22000086',implemento:'HAULER 10"',cliente:'VAMOS RJ'},{nrSerie:'22000087',implemento:'HAULER 10"',cliente:'VAMOS RJ'},
+    {nrSerie:'22000088',implemento:'HAULER 10"',cliente:'ESTOQUE'},{nrSerie:'ENGENHARIA',implemento:'ENGENHARIA',cliente:'INTERNO'},
     {nrSerie:'ESTOQUE',implemento:'ESTOQUE',cliente:'INTERNO'},
   ];
-  popularSelectOperador();
-  popularSelectImplemento();
-  showToast('Modo offline — cadastros locais', 'error');
+  showToast('Modo offline — cadastros locais','error');
 }
 
 // ===================== STEP 1 =====================
+function onOperadorChange() {
+  document.getElementById('alertaAberto').classList.remove('visible');
+  state.abertoInfo = null;
+  verificarAbertoSeCompleto();
+}
+
+function onImplementoChange() {
+  document.getElementById('alertaAberto').classList.remove('visible');
+  state.abertoInfo = null;
+  verificarAbertoSeCompleto();
+}
+
+async function verificarAbertoSeCompleto() {
+  const opSel  = document.getElementById('operador');
+  const impSel = document.getElementById('implemento');
+  if (!opSel.value || !impSel.value) return;
+
+  const imp = JSON.parse(impSel.value);
+  setLoading(true);
+  try {
+    const url  = API+'?action=verificarAberto&operador='+encodeURIComponent(opSel.value)+'&implemento='+encodeURIComponent(imp.nrSerie);
+    const res  = await fetch(url);
+    const data = await res.json();
+
+    if (data.aberto) {
+      state.abertoInfo = data;
+      const info = document.getElementById('alertaAbertoInfo');
+      info.innerHTML =
+        '<strong>Operação:</strong> '+data.operacao+'<br>'+
+        '<strong>Código:</strong> '+(data.codItem||'—')+'<br>'+
+        '<strong>Aberto em:</strong> '+data.carimbo+'<br>'+
+        (data.qtdPlanejada ? '<strong>Qtd planejada:</strong> '+data.qtdPlanejada : '');
+      document.getElementById('alertaAberto').classList.add('visible');
+    } else {
+      state.abertoInfo = null;
+      document.getElementById('alertaAberto').classList.remove('visible');
+    }
+  } catch { state.abertoInfo = null; }
+  finally { setLoading(false); }
+}
+
 async function irStep2() {
   const opSel  = document.getElementById('operador');
   const impSel = document.getElementById('implemento');
-  if (!opSel.value)  { showToast('Selecione o operador', 'error'); return; }
-  if (!impSel.value) { showToast('Selecione o implemento', 'error'); return; }
+  if (!opSel.value)  { showToast('Selecione o operador','error'); return; }
+  if (!impSel.value) { showToast('Selecione o implemento','error'); return; }
 
-  state.operador     = opSel.value;
+  state.operador    = opSel.value;
   state.operadorNome = opSel.options[opSel.selectedIndex].text;
-
   const imp = JSON.parse(impSel.value);
-  state.nrSerie     = imp.nrSerie;
-  state.implemento  = imp.implemento;
-  state.cliente     = imp.cliente;
+  state.nrSerie    = imp.nrSerie;
+  state.implemento = imp.implemento;
+  state.cliente    = imp.cliente;
 
   mostrar('step2'); esconder('step1');
   atualizarSteps(2);
-  verificarAbertoAberto();
+
+  // Se há aberto, desabilita tipos de abertura e sugere fechamento
+  atualizarBotoesTipo();
 }
 
 function voltarStep1() {
   esconder('step2'); mostrar('step1');
-  limparStep2();
-  atualizarSteps(1);
-  document.getElementById('alertaAberto').classList.remove('visible');
+  limparStep2(); atualizarSteps(1);
+  state.modoFechamentoRapido = false;
 }
 
-// ===================== POKA-YOKE =====================
-async function verificarAbertoAberto() {
-  try {
-    const url  = API + '?action=verificarAberto&operador=' + encodeURIComponent(state.operador) + '&implemento=' + encodeURIComponent(state.nrSerie);
-    const res  = await fetch(url);
-    const data = await res.json();
-    if (data.aberto) {
-      document.getElementById('alertaAbertoTexto').textContent =
-        'Apontamento aberto desde ' + data.horario + ' (' + data.operacao + '). Feche-o antes de iniciar um novo.';
-      document.getElementById('alertaAberto').classList.add('visible');
-      state.abertoAberto = true;
+function atualizarBotoesTipo() {
+  const temAberto = !!state.abertoInfo;
+  const tiposAbertura = ['ABERTURA','INICIO_RETRABALHO','INICIO_PARADA'];
+  tiposAbertura.forEach(t => {
+    const btn = document.getElementById('btn-'+t);
+    if (temAberto) {
+      btn.disabled = true;
+      btn.title = 'Feche o apontamento em aberto primeiro';
     } else {
-      document.getElementById('alertaAberto').classList.remove('visible');
-      state.abertoAberto = false;
+      btn.disabled = false;
+      btn.title = '';
     }
-  } catch (e) { state.abertoAberto = false; }
+  });
+}
+
+// ===================== FECHAMENTO RÁPIDO =====================
+function iniciarFechamentoRapido() {
+  if (!state.abertoInfo) return;
+
+  const opSel  = document.getElementById('operador');
+  const impSel = document.getElementById('implemento');
+  if (!opSel.value)  { showToast('Selecione o operador','error'); return; }
+  if (!impSel.value) { showToast('Selecione o implemento','error'); return; }
+
+  state.operador     = opSel.value;
+  state.operadorNome = opSel.options[opSel.selectedIndex].text;
+  const imp = JSON.parse(impSel.value);
+  state.nrSerie    = imp.nrSerie;
+  state.implemento = imp.implemento;
+  state.cliente    = imp.cliente;
+
+  state.modoFechamentoRapido = true;
+  state.tipo = 'FECHAMENTO';
+
+  mostrar('step2'); esconder('step1');
+  atualizarSteps(3);
+
+  // Marca botão fechamento
+  document.querySelectorAll('.tipo-btn').forEach(b => b.className='tipo-btn');
+  document.getElementById('btn-FECHAMENTO').classList.add('sel-blue');
+  atualizarBotoesTipo();
+
+  // Preenche bloco de fechamento inteligente
+  const info = state.abertoInfo;
+  document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
+  document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
+  document.getElementById('fechImplementoLabel').textContent = (info.nrSerie||'') +' | '+(info.implemento||'')+' | '+(info.cliente||'');
+  document.getElementById('fechCarimboLabel').textContent  = info.carimbo   || '—';
+  document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+
+  // Mostra campo quantidade só se operação exige
+  const codOp = (info.operacao||'').substring(0,4);
+  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) {
+    mostrar('blocoQtdFechamento');
+  }
+
+  // Esconde outros blocos, mostra fechamento inteligente
+  ['blocoProducao','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
+  mostrar('blocoFechamentoInteligente');
 }
 
 // ===================== STEP 2 =====================
 function selecionarTipo(tipo) {
-  document.querySelectorAll('.tipo-btn').forEach(b => b.className = 'tipo-btn');
+  if (document.getElementById('btn-'+tipo).disabled) return;
 
-  if (state.abertoAberto && ['ABERTURA','INICIO_RETRABALHO','INICIO_PARADA'].includes(tipo)) {
-    showToast('Feche o apontamento em aberto primeiro', 'error'); return;
-  }
+  document.querySelectorAll('.tipo-btn').forEach(b => {
+    if(!b.disabled) b.className='tipo-btn';
+  });
 
   state.tipo = tipo;
-  const btn  = document.getElementById('btn-' + tipo);
-  if (tipo.includes('INICIO') || tipo === 'ABERTURA')    btn.classList.add('sel-green');
-  else if (tipo.includes('PARADA'))                      btn.classList.add('sel-amber');
-  else if (tipo.includes('RETRABALHO'))                  btn.classList.add('sel-red');
-  else                                                   btn.classList.add('sel-blue');
+  state.modoFechamentoRapido = false;
+  const btn = document.getElementById('btn-'+tipo);
+  if (tipo==='ABERTURA'||tipo.includes('INICIO'))   btn.classList.add('sel-green');
+  else if (tipo.includes('PARADA'))                 btn.classList.add('sel-amber');
+  else if (tipo.includes('RETRABALHO'))             btn.classList.add('sel-red');
+  else                                              btn.classList.add('sel-blue');
 
-  ['blocoProducao','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
+  ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
 
-  if (tipo === 'ABERTURA' || tipo === 'FECHAMENTO')              mostrar('blocoProducao');
-  else if (tipo.includes('RETRABALHO'))                          mostrar('blocoRetrabalho');
-  else if (tipo.includes('PARADA'))                              mostrar('blocoParada');
-  if (tipo === 'FECHAMENTO')                                     mostrar('blocoLote');
+  if (tipo==='ABERTURA')                mostrar('blocoProducao');
+  else if (tipo==='FECHAMENTO')         { mostrar('blocoFechamentoInteligente'); preencherFechamentoSeAberto(); }
+  else if (tipo.includes('RETRABALHO')) mostrar('blocoRetrabalho');
+  else if (tipo.includes('PARADA'))     mostrar('blocoParada');
 
   atualizarSteps(3);
+}
+
+function preencherFechamentoSeAberto() {
+  const info = state.abertoInfo;
+  if (!info) {
+    // Sem aberto: mostra campos normais de produção para o fechamento
+    esconder('blocoFechamentoInteligente');
+    mostrar('blocoProducao');
+    mostrar('blocoLote');
+    return;
+  }
+  // Com aberto: preenche inteligente
+  document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
+  document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
+  document.getElementById('fechImplementoLabel').textContent = (info.nrSerie||'')+' | '+(info.implemento||'')+' | '+(info.cliente||'');
+  document.getElementById('fechCarimboLabel').textContent  = info.carimbo   || '—';
+  document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+  const codOp = (info.operacao||'').substring(0,4);
+  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
+  else esconder('blocoQtdFechamento');
+  mostrar('blocoFechamentoInteligente');
+  mostrar('blocoLote');
+}
+
+function calcularSaldo() {
+  const planejada = parseInt(document.getElementById('fechQtdPlanejadaLabel').textContent)||0;
+  const realizada = parseInt(document.getElementById('fechQuantidade').value)||0;
+  const box = document.getElementById('saldoBox');
+  if (!planejada || !realizada) { box.classList.remove('visible'); return; }
+  const saldo = planejada - realizada;
+  box.classList.add('visible');
+  if (saldo > 0) {
+    box.style.background='rgba(243,156,18,.1)'; box.style.color='var(--amber)';
+    box.style.borderColor='rgba(243,156,18,.3)';
+    box.textContent = 'Saldo restante: '+saldo+' itens';
+  } else if (saldo === 0) {
+    box.style.background='rgba(46,204,113,.1)'; box.style.color='var(--green)';
+    box.style.borderColor='rgba(46,204,113,.3)';
+    box.textContent = '✓ Produção completa';
+  } else {
+    box.style.background='rgba(231,76,60,.1)'; box.style.color='var(--red)';
+    box.style.borderColor='rgba(231,76,60,.3)';
+    box.textContent = 'Atenção: realizado excede planejado em '+(Math.abs(saldo))+' itens';
+  }
 }
 
 function renderOpGrid(id, fn) {
@@ -595,335 +731,316 @@ function renderOpGrid(id, fn) {
 
 function renderParadasGrid() {
   document.getElementById('paradaGrid').innerHTML = paradas.map(p =>
-    `<button class="parada-btn" onclick="selecionarParada('${p}')" id="parada-${p}">${p}</button>`).join('');
+    `<button class="parada-btn" onclick="selecionarParada('${p}')">${p}</button>`).join('');
 }
 
 function selecionarOperacao(cod) {
-  document.querySelectorAll('#opGrid .op-btn').forEach(b => b.classList.remove('selected'));
-  document.getElementById('opGrid-' + cod).classList.add('selected');
+  document.querySelectorAll('#opGrid .op-btn').forEach(b=>b.classList.remove('selected'));
+  document.getElementById('opGrid-'+cod).classList.add('selected');
   state.operacao = cod;
+
+  // Regra de quantidade por operação
+  if (OPS_REQUEREM_QTD.includes(cod)) mostrar('campoQtdAbertura');
+  else esconder('campoQtdAbertura');
 }
 
 function selecionarOpRetrabalho(cod) {
-  document.querySelectorAll('#opGridRetrabalho .op-btn').forEach(b => b.classList.remove('selected'));
-  document.getElementById('opGridRetrabalho-' + cod).classList.add('selected');
+  document.querySelectorAll('#opGridRetrabalho .op-btn').forEach(b=>b.classList.remove('selected'));
+  document.getElementById('opGridRetrabalho-'+cod).classList.add('selected');
   state.opRetrabalho = cod;
 }
 
-function validarCodItem(val) {
-  const campoQtd = document.getElementById('campoQtd');
-  const labelQtd = document.getElementById('labelQtd');
-  if (val.length > 0) {
-    mostrar('campoQtd');
-    if (val.startsWith('5')) { labelQtd.classList.add('field-required'); }
-    else                     { labelQtd.classList.remove('field-required'); }
-  } else {
-    esconder('campoQtd');
-  }
-}
-
 function selecionarRetrabalho(tipo) {
-  document.querySelectorAll('[id^="rt-"]').forEach(b => b.className = 'tipo-btn');
-  document.getElementById('rt-' + tipo).classList.add('sel-red');
+  document.querySelectorAll('[id^="rt-"]').forEach(b=>b.className='tipo-btn');
+  document.getElementById('rt-'+tipo).classList.add('sel-red');
   state.retrabalho = tipo;
   esconder('blocoRNC'); esconder('blocoOpRetrabalho');
-  if (tipo === 'RNC') mostrar('blocoRNC'); else mostrar('blocoOpRetrabalho');
+  if (tipo==='RNC') mostrar('blocoRNC'); else mostrar('blocoOpRetrabalho');
 }
 
 function selecionarParada(tipo) {
-  document.querySelectorAll('#paradaGrid .parada-btn').forEach(b => b.classList.remove('selected'));
-  document.getElementById('parada-' + tipo).classList.add('selected');
+  document.querySelectorAll('#paradaGrid .parada-btn').forEach(b=>b.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
   state.parada = tipo;
-  if (tipo === 'Set-up') mostrar('blocoSetup'); else esconder('blocoSetup');
+  if (tipo==='Set-up') mostrar('blocoSetup'); else esconder('blocoSetup');
 }
 
 function selecionarSetup(tipo) {
-  document.querySelectorAll('#blocoSetup .parada-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('#blocoSetup .parada-btn').forEach(b=>b.classList.remove('selected'));
   event.currentTarget.classList.add('selected');
   state.setup = tipo;
 }
 
 // ===================== LOTE =====================
 function adicionarLote() {
-  const inp = document.getElementById('loteInput');
-  const val = inp.value.trim();
+  const inp=document.getElementById('loteInput'), val=inp.value.trim();
   if (!val) return;
-  if (state.lote.includes(val)) { showToast('Nº série já adicionado', 'error'); return; }
-  state.lote.push(val); inp.value = '';
-  renderLote();
+  if (state.lote.includes(val)){showToast('Nº série já adicionado','error');return;}
+  state.lote.push(val); inp.value=''; renderLote();
 }
-
-function removerLote(i) { state.lote.splice(i, 1); renderLote(); }
-
-function renderLote() {
-  document.getElementById('loteItens').innerHTML = state.lote.map((s, i) =>
+function removerLote(i){state.lote.splice(i,1);renderLote();}
+function renderLote(){
+  document.getElementById('loteItens').innerHTML=state.lote.map((s,i)=>
     `<div class="lote-item"><span>${s}</span><button class="lote-remove" onclick="removerLote(${i})">×</button></div>`).join('');
 }
 
 // ===================== ENVIO =====================
 async function enviarApontamento() {
   if (!validarFormulario()) return;
-  const btn = document.getElementById('btnEnviar');
-  btn.disabled = true; btn.textContent = 'Registrando...';
+  const btn=document.getElementById('btnEnviar');
+  btn.disabled=true; btn.textContent='Registrando...';
   setLoading(true);
 
-  const now  = new Date();
-  const pad  = n => String(n).padStart(2,'0');
-  const hora = pad(now.getHours()) + ':' + pad(now.getMinutes());
-  // Carimbo no formato dd/MM/yyyy HH:mm:ss já no fuso local do browser
-  const carimbo = pad(now.getDate()) + '/' + pad(now.getMonth()+1) + '/' + now.getFullYear()
-    + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
-  const qtdEl = document.getElementById('quantidade');
-  const qtdVal = qtdEl ? qtdEl.value : '';
-  const qtd = qtdVal === '' ? null : Number(qtdVal);
+  const ts   = carimboBrowser();
+  const hora = pad(new Date().getHours())+':'+pad(new Date().getMinutes());
 
-  const payload = {
-    timestamp: carimbo, hora,
-    operador: state.operador, operadorNome: state.operadorNome,
-    nrSerie: state.nrSerie, implemento: state.implemento, cliente: state.cliente,
-    tipoApontamento: state.tipo,
-    operacao: state.operacao, opRetrabalho: state.opRetrabalho,
-    codItem: document.getElementById('codItem').value || '',
-    quantidade: qtd,
-    obs1: document.getElementById('obs1').value || '',
-    retrabalho: state.retrabalho, numRNC: document.getElementById('numRNC').value || '',
-    parada: state.parada, setup: state.setup,
-    obs2: document.getElementById('obs2') ? document.getElementById('obs2').value || '' : '',
-    lote: state.lote.join(', '),
-  };
+  let payload;
+
+  if (state.tipo==='FECHAMENTO' && state.abertoInfo && state.modoFechamentoRapido===false && document.getElementById('blocoFechamentoInteligente').classList.contains('visible') ||
+      state.modoFechamentoRapido) {
+    // FECHAMENTO INTELIGENTE: usa dados da abertura
+    const info = state.abertoInfo;
+    const qtdEl = document.getElementById('fechQuantidade');
+    const qtdVal = qtdEl ? qtdEl.value : '';
+    payload = {
+      timestamp: ts, hora,
+      operador: state.operador, operadorNome: state.operadorNome,
+      nrSerie: info.nrSerie || state.nrSerie,
+      implemento: info.implemento || state.implemento,
+      cliente: info.cliente || state.cliente,
+      tipoApontamento: 'FECHAMENTO',
+      operacao: (info.operacao||'').substring(0,4),
+      codItem: info.codItem || '',
+      quantidade: qtdVal===''?null:Number(qtdVal),
+      qtdPlanejada: info.qtdPlanejada || '',
+      obs1: document.getElementById('fechObs').value || '',
+      setup:'', obs2:'', retrabalho:'', numRNC:'', opRetrabalho:'', parada:'',
+      lote: state.lote.join(', '),
+    };
+  } else {
+    // FLUXO NORMAL
+    const qtdPl = document.getElementById('qtdPlanejada') ? document.getElementById('qtdPlanejada').value : '';
+    payload = {
+      timestamp: ts, hora,
+      operador: state.operador, operadorNome: state.operadorNome,
+      nrSerie: state.nrSerie, implemento: state.implemento, cliente: state.cliente,
+      tipoApontamento: state.tipo,
+      operacao: state.operacao, opRetrabalho: state.opRetrabalho,
+      codItem: document.getElementById('codItem').value || '',
+      quantidade: null,
+      qtdPlanejada: qtdPl || '',
+      obs1: document.getElementById('obs1').value || '',
+      retrabalho: state.retrabalho, numRNC: document.getElementById('numRNC').value||'',
+      parada: state.parada, setup: state.setup,
+      obs2: document.getElementById('obs2') ? document.getElementById('obs2').value||'' : '',
+      lote: state.lote.join(', '),
+    };
+  }
 
   try {
     const data = await postAPI(payload);
     if (data.success) mostrarSucesso(payload);
-    else { showToast('Erro: ' + data.message, 'error'); btn.disabled = false; btn.textContent = 'Registrar apontamento'; }
-  } catch (e) {
-    salvarOffline(payload); mostrarSucesso(payload, true);
+    else { showToast('Erro: '+data.message,'error'); btn.disabled=false; btn.textContent='Registrar apontamento'; }
+  } catch {
+    salvarOffline(payload); mostrarSucesso(payload,true);
   } finally { setLoading(false); }
 }
 
 function validarFormulario() {
-  if (!state.tipo) { showToast('Selecione o tipo de apontamento', 'error'); return false; }
-  if (['ABERTURA','FECHAMENTO'].includes(state.tipo)) {
-    if (!state.operacao) { showToast('Selecione a operação', 'error'); return false; }
-    const cod = document.getElementById('codItem').value;
-    if (!cod) { showToast('Informe o código do item', 'error'); return false; }
-    if (cod.startsWith('5') && !document.getElementById('quantidade').value) {
-      showToast('Quantidade obrigatória para este código', 'error'); return false;
+  if (!state.tipo) { showToast('Selecione o tipo de apontamento','error'); return false; }
+
+  const ehFechamentoInteligente = state.tipo==='FECHAMENTO' && state.abertoInfo &&
+    document.getElementById('blocoFechamentoInteligente').classList.contains('visible');
+
+  if (ehFechamentoInteligente || state.modoFechamentoRapido) {
+    const info = state.abertoInfo;
+    const codOp = (info.operacao||'').substring(0,4);
+    if (OPS_REQUEREM_QTD.includes(codOp)) {
+      const qtd = document.getElementById('fechQuantidade').value;
+      if (!qtd || Number(qtd) <= 0) { showToast('Informe a quantidade realizada','error'); return false; }
+    }
+    return true;
+  }
+
+  if (state.tipo==='ABERTURA') {
+    if (!state.operacao) { showToast('Selecione a operação','error'); return false; }
+    if (!document.getElementById('codItem').value) { showToast('Informe o código do item','error'); return false; }
+    if (OPS_REQUEREM_QTD.includes(state.operacao)) {
+      const qtd = document.getElementById('qtdPlanejada').value;
+      if (!qtd || Number(qtd) <= 0) { showToast('Informe a quantidade planejada','error'); return false; }
     }
   }
-  if (state.tipo.includes('PARADA') && !state.parada) { showToast('Selecione o tipo de parada', 'error'); return false; }
-  if (state.tipo.includes('RETRABALHO') && !state.retrabalho) { showToast('Selecione o tipo de retrabalho', 'error'); return false; }
-  if (state.retrabalho === 'RNC' && !document.getElementById('numRNC').value) { showToast('Informe o Nº da RNC', 'error'); return false; }
+  if (state.tipo==='FECHAMENTO' && !state.abertoInfo) {
+    if (!state.operacao) { showToast('Selecione a operação','error'); return false; }
+    if (!document.getElementById('codItem').value) { showToast('Informe o código do item','error'); return false; }
+  }
+  if (state.tipo.includes('PARADA') && !state.parada) { showToast('Selecione o tipo de parada','error'); return false; }
+  if (state.tipo.includes('RETRABALHO') && !state.retrabalho) { showToast('Selecione o tipo de retrabalho','error'); return false; }
+  if (state.retrabalho==='RNC' && !document.getElementById('numRNC').value) { showToast('Informe o Nº da RNC','error'); return false; }
   return true;
 }
 
-function mostrarSucesso(payload, offline = false) {
-  document.getElementById('formContent').style.display = 'none';
+function mostrarSucesso(payload, offline=false) {
+  document.getElementById('formContent').style.display='none';
   document.getElementById('successScreen').classList.add('visible');
-  const tipos = { ABERTURA:'Abertura registrada', FECHAMENTO:'Fechamento registrado', INICIO_PARADA:'Início de parada', TERMINO_PARADA:'Término de parada', INICIO_RETRABALHO:'Início de retrabalho', TERMINO_RETRABALHO:'Término de retrabalho' };
+  const tipos={ABERTURA:'Abertura registrada',FECHAMENTO:'Fechamento registrado',
+    INICIO_PARADA:'Início de parada',TERMINO_PARADA:'Término de parada',
+    INICIO_RETRABALHO:'Início de retrabalho',TERMINO_RETRABALHO:'Término de retrabalho'};
+  const nome = state.operadorNome.includes('—')
+    ? state.operadorNome.split('—')[1].trim()
+    : state.operadorNome;
   document.getElementById('successMsg').innerHTML =
-    `<strong>${tipos[payload.tipoApontamento] || payload.tipoApontamento}</strong><br>${payload.hora} · ${state.operadorNome.split('—')[1]?.trim() || state.operadorNome}` +
-    (offline ? '<br><small style="color:var(--amber)">Salvo localmente — sincroniza ao conectar</small>' : '');
+    `<strong>${tipos[payload.tipoApontamento]||payload.tipoApontamento}</strong><br>`+
+    `${payload.hora} · ${nome}`+
+    (payload.quantidade!=null?`<br>Qtd realizada: <strong>${payload.quantidade}</strong>`+
+      (payload.qtdPlanejada?` / ${payload.qtdPlanejada} planejados`:''):'') +
+    (offline?'<br><small style="color:var(--amber)">Salvo localmente — sincroniza ao conectar</small>':'');
 }
 
 function novoApontamento() {
-  document.getElementById('formContent').style.display = 'block';
+  document.getElementById('formContent').style.display='block';
   document.getElementById('successScreen').classList.remove('visible');
-  document.getElementById('btnEnviar').disabled = false;
-  document.getElementById('btnEnviar').textContent = 'Registrar apontamento';
-  document.getElementById('operador').value = '';
-  document.getElementById('implemento').value = '';
+  document.getElementById('btnEnviar').disabled=false;
+  document.getElementById('btnEnviar').textContent='Registrar apontamento';
+  document.getElementById('operador').value='';
+  document.getElementById('implemento').value='';
+  document.getElementById('alertaAberto').classList.remove('visible');
+  state.abertoInfo=null; state.modoFechamentoRapido=false;
   limparStep2(); voltarStep1();
-  Object.assign(state, { operador:'', operadorNome:'', nrSerie:'', implemento:'', cliente:'', tipo:'', operacao:'', opRetrabalho:'', retrabalho:'', numRNC:'', parada:'', setup:'', lote:[], abertoAberto:false });
+  Object.assign(state,{operador:'',operadorNome:'',nrSerie:'',implemento:'',cliente:'',
+    tipo:'',operacao:'',opRetrabalho:'',retrabalho:'',numRNC:'',parada:'',setup:'',lote:[]});
 }
 
 function limparStep2() {
-  state.tipo = ''; state.operacao = ''; state.parada = ''; state.retrabalho = ''; state.lote = [];
-  document.querySelectorAll('.tipo-btn,.op-btn,.parada-btn').forEach(b => { b.className = b.className.replace(/sel-\w+|selected/g,'').trim(); });
-  ['blocoProducao','blocoRetrabalho','blocoParada','blocoLote','blocoRNC','blocoOpRetrabalho','blocoSetup','campoQtd'].forEach(esconder);
-  ['codItem','obs1','numRNC','obs2'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
-  document.getElementById('quantidade') && (document.getElementById('quantidade').value = '');
-  document.getElementById('loteItens').innerHTML = '';
+  state.tipo='';state.operacao='';state.parada='';state.retrabalho='';state.lote=[];
+  document.querySelectorAll('.tipo-btn').forEach(b=>{if(!b.disabled)b.className='tipo-btn';});
+  document.querySelectorAll('.op-btn,.parada-btn').forEach(b=>b.classList.remove('selected'));
+  ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote',
+   'blocoRNC','blocoOpRetrabalho','blocoSetup','campoQtdAbertura','blocoQtdFechamento'].forEach(esconder);
+  ['codItem','obs1','numRNC','obs2','qtdPlanejada','fechQuantidade','fechObs','loteInput'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  document.getElementById('loteItens').innerHTML='';
+  document.getElementById('saldoBox').classList.remove('visible');
 }
 
 // ===================== OFFLINE =====================
-function salvarOffline(p) {
-  const f = JSON.parse(localStorage.getItem('agricef_fila')||'[]'); f.push(p);
-  localStorage.setItem('agricef_fila', JSON.stringify(f));
+function salvarOffline(p){
+  const f=JSON.parse(localStorage.getItem('agricef_fila')||'[]');f.push(p);
+  localStorage.setItem('agricef_fila',JSON.stringify(f));
 }
-async function sincronizarFila() {
-  const fila = JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-  if (!fila.length) return;
-  const nova = [];
-  for (const item of fila) {
-    try { const d = await postAPI(item); if(!d.success) nova.push(item); }
-    catch { nova.push(item); }
+async function sincronizarFila(){
+  const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
+  if(!fila.length) return;
+  const nova=[];
+  for(const item of fila){
+    try{const d=await postAPI(item);if(!d.success)nova.push(item);}
+    catch{nova.push(item);}
   }
-  localStorage.setItem('agricef_fila', JSON.stringify(nova));
-  if (nova.length < fila.length) showToast((fila.length-nova.length) + ' apontamento(s) sincronizado(s)', 'success');
+  localStorage.setItem('agricef_fila',JSON.stringify(nova));
+  if(nova.length<fila.length) showToast((fila.length-nova.length)+' apontamento(s) sincronizado(s)','success');
 }
 
-// ===================== ADMIN =====================
-let pinBuffer = '';
-
-function abrirAdmin() {
-  document.getElementById('formContent').style.display = 'none';
-  document.getElementById('successScreen').classList.remove('visible');
-  document.getElementById('pageAdmin').style.display = 'block';
-  document.getElementById('adminLock').style.display = 'block';
-  document.getElementById('adminContent').style.display = 'none';
-  pinBuffer = ''; atualizarPinDisplay();
-}
-
-function fecharAdmin() {
-  document.getElementById('pageAdmin').style.display = 'none';
-  document.getElementById('formContent').style.display = 'block';
-  pinBuffer = ''; atualizarPinDisplay();
-}
-
-function pinKey(k) {
-  if (pinBuffer.length >= 4) return;
-  pinBuffer += k; atualizarPinDisplay();
-}
-function pinDel() { pinBuffer = pinBuffer.slice(0,-1); atualizarPinDisplay(); }
-function atualizarPinDisplay() {
-  const d = document.getElementById('pinDisplay');
-  d.textContent = '●'.repeat(pinBuffer.length) + '_'.repeat(4 - pinBuffer.length);
-}
-function pinOk() {
-  if (pinBuffer === PIN_ADMIN) {
-    document.getElementById('adminLock').style.display = 'none';
-    document.getElementById('adminContent').style.display = 'block';
-    renderListaAdmin();
-  } else {
-    showToast('PIN incorreto', 'error');
-    pinBuffer = ''; atualizarPinDisplay();
-  }
-}
-
-function switchTab(tab) {
-  document.querySelectorAll('.admin-tab').forEach((b,i) => b.classList.toggle('active', (i===0&&tab==='operadores')||(i===1&&tab==='series')));
-  document.getElementById('tabOperadores').style.display = tab === 'operadores' ? 'block' : 'none';
-  document.getElementById('tabSeries').style.display     = tab === 'series'     ? 'block' : 'none';
-}
-
-function renderListaAdmin() {
-  // Operadores
-  const lo = document.getElementById('listaOperadores');
-  lo.innerHTML = state.operadores.length ? state.operadores.map(op =>
-    `<div class="cadastro-item">
-      <div class="cadastro-item-info">
-        <div class="cadastro-item-code">${op.codigo}</div>
-        <div class="cadastro-item-name">${op.nome}</div>
-      </div>
-      <button class="btn-danger" onclick="removerOperador('${op.codigo}')">Remover</button>
-    </div>`).join('') : '<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhum operador cadastrado.</div>';
-
-  // Séries
-  const ls = document.getElementById('listaSeries');
-  ls.innerHTML = state.series.length ? state.series.map(s =>
-    `<div class="cadastro-item">
-      <div class="cadastro-item-info">
-        <div class="cadastro-item-code">${s.nrSerie} — ${s.cliente}</div>
-        <div class="cadastro-item-name">${s.implemento}</div>
-      </div>
-      <button class="btn-danger" onclick="removerSerie('${s.nrSerie}')">Remover</button>
-    </div>`).join('') : '<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma série cadastrada.</div>';
-}
-
-async function adicionarOperador() {
-  const cod  = document.getElementById('newOpCodigo').value.trim().toUpperCase();
-  const nome = document.getElementById('newOpNome').value.trim().toUpperCase();
-  if (!cod || !nome) { showToast('Preencha código e nome', 'error'); return; }
-  setLoading(true);
-  try {
-    const res = await postAPI({action:'salvarOperador', codigo:cod, nome});
-    const data = await res.json();
-    if (data.success) {
-      const existe = state.operadores.find(o => o.codigo === cod);
-      if (existe) existe.nome = nome; else state.operadores.push({codigo:cod, nome});
-      popularSelectOperador(); renderListaAdmin();
-      document.getElementById('newOpCodigo').value = '';
-      document.getElementById('newOpNome').value = '';
-      showToast('Operador adicionado', 'success');
-    } else showToast(data.message, 'error');
-  } catch { showToast('Erro ao salvar', 'error'); } finally { setLoading(false); }
-}
-
-async function removerOperador(codigo) {
-  if (!confirm('Remover operador ' + codigo + '?')) return;
-  setLoading(true);
-  try {
-    const res = await postAPI({action:'removerOperador', codigo});
-    const data = await res.json();
-    if (data.success) {
-      state.operadores = state.operadores.filter(o => o.codigo !== codigo);
-      popularSelectOperador(); renderListaAdmin();
-      showToast('Operador removido', 'success');
-    } else showToast(data.message, 'error');
-  } catch { showToast('Erro ao remover', 'error'); } finally { setLoading(false); }
-}
-
-async function adicionarSerie() {
-  const nr   = document.getElementById('newSerNr').value.trim().toUpperCase();
-  const impl = document.getElementById('newSerImpl').value.trim().toUpperCase();
-  const cli  = document.getElementById('newSerCli').value.trim().toUpperCase();
-  if (!nr || !impl || !cli) { showToast('Preencha todos os campos', 'error'); return; }
-  setLoading(true);
-  try {
-    const res = await postAPI({action:'salvarSerie', nrSerie:nr, implemento:impl, cliente:cli});
-    const data = await res.json();
-    if (data.success) {
-      const existe = state.series.find(s => s.nrSerie === nr);
-      if (existe) { existe.implemento = impl; existe.cliente = cli; } else state.series.push({nrSerie:nr, implemento:impl, cliente:cli});
-      popularSelectImplemento(); renderListaAdmin();
-      ['newSerNr','newSerImpl','newSerCli'].forEach(id => document.getElementById(id).value = '');
-      showToast('Série adicionada', 'success');
-    } else showToast(data.message, 'error');
-  } catch { showToast('Erro ao salvar', 'error'); } finally { setLoading(false); }
-}
-
-async function removerSerie(nrSerie) {
-  if (!confirm('Remover série ' + nrSerie + '?')) return;
-  setLoading(true);
-  try {
-    const res = await postAPI({action:'removerSerie', nrSerie});
-    const data = await res.json();
-    if (data.success) {
-      state.series = state.series.filter(s => s.nrSerie !== nrSerie);
-      popularSelectImplemento(); renderListaAdmin();
-      showToast('Série removida', 'success');
-    } else showToast(data.message, 'error');
-  } catch { showToast('Erro ao remover', 'error'); } finally { setLoading(false); }
-}
-
-// ===================== HELPERS =====================
-function mostrar(id) { const el = document.getElementById(id); if(el){ el.classList.remove('section-block'); el.classList.add('visible'); } }
-function esconder(id) { const el = document.getElementById(id); if(el){ el.classList.add('section-block'); el.classList.remove('visible'); } }
-function atualizarSteps(s) {
-  const labels = ['','Identificação','Tipo','Detalhes'];
-  for (let i=1;i<=3;i++) { const d=document.getElementById('dot'+i); d.classList.remove('active','done'); if(i<s)d.classList.add('done'); else if(i===s)d.classList.add('active'); }
-  document.getElementById('stepLabel').textContent = labels[s]||'';
-}
-function setLoading(v) { document.getElementById('loadingOverlay').classList.toggle('visible', v); }
-let toastTimer;
-function showToast(msg, type='') {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.className = 'toast ' + type + ' show';
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
-}
-
-
-// ===================== API HELPER =====================
-// Apps Script não aceita POST com CORS de domínio externo.
-// Solução: envia tudo via GET com payload encodado na URL (doGet no script).
+// ===================== API =====================
 async function postAPI(obj) {
-  const params = new URLSearchParams({ payload: JSON.stringify(obj) });
-  const res = await fetch(API + '?' + params.toString());
+  const params = new URLSearchParams({payload: JSON.stringify(obj)});
+  const res = await fetch(API+'?'+params.toString());
   return res.json();
 }
 
-window.addEventListener('online', sincronizarFila);
+// ===================== ADMIN =====================
+let pinBuffer='';
+function abrirAdmin(){
+  document.getElementById('formContent').style.display='none';
+  document.getElementById('successScreen').classList.remove('visible');
+  document.getElementById('pageAdmin').style.display='block';
+  document.getElementById('adminLock').style.display='block';
+  document.getElementById('adminContent').style.display='none';
+  pinBuffer=''; atualizarPinDisplay();
+}
+function fecharAdmin(){
+  document.getElementById('pageAdmin').style.display='none';
+  document.getElementById('formContent').style.display='block';
+  pinBuffer=''; atualizarPinDisplay();
+}
+function pinKey(k){if(pinBuffer.length>=4)return;pinBuffer+=k;atualizarPinDisplay();}
+function pinDel(){pinBuffer=pinBuffer.slice(0,-1);atualizarPinDisplay();}
+function atualizarPinDisplay(){document.getElementById('pinDisplay').textContent='●'.repeat(pinBuffer.length)+'_'.repeat(4-pinBuffer.length);}
+function pinOk(){
+  if(pinBuffer===PIN_ADMIN){
+    document.getElementById('adminLock').style.display='none';
+    document.getElementById('adminContent').style.display='block';
+    renderListaAdmin();
+  } else { showToast('PIN incorreto','error'); pinBuffer=''; atualizarPinDisplay(); }
+}
+function switchTab(tab){
+  document.querySelectorAll('.admin-tab').forEach((b,i)=>b.classList.toggle('active',(i===0&&tab==='operadores')||(i===1&&tab==='series')));
+  document.getElementById('tabOperadores').style.display=tab==='operadores'?'block':'none';
+  document.getElementById('tabSeries').style.display=tab==='series'?'block':'none';
+}
+function renderListaAdmin(){
+  document.getElementById('listaOperadores').innerHTML=state.operadores.length
+    ?state.operadores.map(op=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${op.codigo}</div><div class="cadastro-item-name">${op.nome}</div></div><button class="btn-danger" onclick="removerOperador('${op.codigo}')">Remover</button></div>`).join('')
+    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhum operador.</div>';
+  document.getElementById('listaSeries').innerHTML=state.series.length
+    ?state.series.map(s=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${s.nrSerie} — ${s.cliente}</div><div class="cadastro-item-name">${s.implemento}</div></div><button class="btn-danger" onclick="removerSerie('${s.nrSerie}')">Remover</button></div>`).join('')
+    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma série.</div>';
+}
+async function adicionarOperador(){
+  const cod=document.getElementById('newOpCodigo').value.trim().toUpperCase();
+  const nome=document.getElementById('newOpNome').value.trim().toUpperCase();
+  if(!cod||!nome){showToast('Preencha código e nome','error');return;}
+  setLoading(true);
+  try{const d=await postAPI({action:'salvarOperador',codigo:cod,nome});
+    if(d.success){const e=state.operadores.find(o=>o.codigo===cod);if(e)e.nome=nome;else state.operadores.push({codigo:cod,nome});popularSelectOperador();renderListaAdmin();document.getElementById('newOpCodigo').value='';document.getElementById('newOpNome').value='';showToast('Operador adicionado','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao salvar','error');}finally{setLoading(false);}
+}
+async function removerOperador(codigo){
+  if(!confirm('Remover operador '+codigo+'?'))return;
+  setLoading(true);
+  try{const d=await postAPI({action:'removerOperador',codigo});
+    if(d.success){state.operadores=state.operadores.filter(o=>o.codigo!==codigo);popularSelectOperador();renderListaAdmin();showToast('Operador removido','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao remover','error');}finally{setLoading(false);}
+}
+async function adicionarSerie(){
+  const nr=document.getElementById('newSerNr').value.trim().toUpperCase();
+  const impl=document.getElementById('newSerImpl').value.trim().toUpperCase();
+  const cli=document.getElementById('newSerCli').value.trim().toUpperCase();
+  if(!nr||!impl||!cli){showToast('Preencha todos os campos','error');return;}
+  setLoading(true);
+  try{const d=await postAPI({action:'salvarSerie',nrSerie:nr,implemento:impl,cliente:cli});
+    if(d.success){const e=state.series.find(s=>s.nrSerie===nr);if(e){e.implemento=impl;e.cliente=cli;}else state.series.push({nrSerie:nr,implemento:impl,cliente:cli});popularSelectImplemento();renderListaAdmin();['newSerNr','newSerImpl','newSerCli'].forEach(id=>document.getElementById(id).value='');showToast('Série adicionada','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao salvar','error');}finally{setLoading(false);}
+}
+async function removerSerie(nrSerie){
+  if(!confirm('Remover série '+nrSerie+'?'))return;
+  setLoading(true);
+  try{const d=await postAPI({action:'removerSerie',nrSerie});
+    if(d.success){state.series=state.series.filter(s=>s.nrSerie!==nrSerie);popularSelectImplemento();renderListaAdmin();showToast('Série removida','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao remover','error');}finally{setLoading(false);}
+}
+
+// ===================== HELPERS =====================
+function mostrar(id){const el=document.getElementById(id);if(el){el.classList.remove('section-block');el.classList.add('visible');}}
+function esconder(id){const el=document.getElementById(id);if(el){el.classList.add('section-block');el.classList.remove('visible');}}
+function atualizarSteps(s){
+  const labels=['','Identificação','Tipo','Detalhes'];
+  for(let i=1;i<=3;i++){const d=document.getElementById('dot'+i);d.classList.remove('active','done');if(i<s)d.classList.add('done');else if(i===s)d.classList.add('active');}
+  document.getElementById('stepLabel').textContent=labels[s]||'';
+}
+function setLoading(v){document.getElementById('loadingOverlay').classList.toggle('visible',v);}
+let toastTimer;
+function showToast(msg,type=''){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.className='toast '+type+' show';
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2800);
+}
+
+window.addEventListener('online',sincronizarFila);
 init();
 </script>
 </body>
