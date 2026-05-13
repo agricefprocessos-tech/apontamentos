@@ -856,8 +856,26 @@ async function enviarApontamento() {
 
   try {
     const data = await postAPI(payload);
-    if (data.success) mostrarSucesso(payload);
-    else { showToast('Erro: '+data.message,'error'); btn.disabled=false; btn.textContent='Registrar apontamento'; }
+    if (data.success) {
+      mostrarSucesso(payload);
+    } else if (data.bloqueado) {
+      // Servidor bloqueou: atualiza o alerta com os dados do aberto
+      state.abertoInfo = data.aberto;
+      document.getElementById('alertaAbertoInfo').innerHTML =
+        '<strong>Série:</strong> '+(data.aberto.nrSerie||'—')+' | '+(data.aberto.implemento||'')+'<br>'+
+        '<strong>Operação:</strong> '+(data.aberto.operacao||'—')+'<br>'+
+        '<strong>Código:</strong> '+(data.aberto.codItem||'—')+'<br>'+
+        '<strong>Aberto em:</strong> '+(data.aberto.carimbo||'—')+
+        (data.aberto.qtdPlanejada?'<br><strong>Qtd planejada:</strong> '+data.aberto.qtdPlanejada:'');
+      document.getElementById('alertaAberto').classList.add('visible');
+      showToast('Apontamento em aberto — feche antes de abrir novo','error');
+      btn.disabled=false; btn.textContent='Registrar apontamento';
+      // Volta para step1 para mostrar o alerta
+      voltarStep1();
+    } else {
+      showToast('Erro: '+data.message,'error');
+      btn.disabled=false; btn.textContent='Registrar apontamento';
+    }
   } catch {
     salvarOffline(payload); mostrarSucesso(payload,true);
   } finally { setLoading(false); }
