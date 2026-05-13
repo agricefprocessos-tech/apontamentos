@@ -527,35 +527,52 @@ function usarFallback() {
 function onOperadorChange() {
   document.getElementById('alertaAberto').classList.remove('visible');
   state.abertoInfo = null;
-  verificarAbertoSeCompleto();
+  verificarAbertoSeCompleto(); // verifica ao selecionar operador
 }
 
 function onImplementoChange() {
-  document.getElementById('alertaAberto').classList.remove('visible');
-  state.abertoInfo = null;
-  verificarAbertoSeCompleto();
+  // Não re-verifica ao mudar série — regra é por operador
+  // mas atualiza botões caso abertoInfo já exista
+  atualizarBotoesTipo();
 }
 
 async function verificarAbertoSeCompleto() {
   const opSel  = document.getElementById('operador');
   const impSel = document.getElementById('implemento');
-  if (!opSel.value || !impSel.value) return;
+  // Verifica assim que operador for selecionado (independe da série)
+  if (!opSel.value) return;
 
-  const imp = JSON.parse(impSel.value);
   setLoading(true);
   try {
-    const url  = API+'?action=verificarAberto&operador='+encodeURIComponent(opSel.value)+'&implemento='+encodeURIComponent(imp.nrSerie);
+    // Busca por operador apenas — regra: um aberto por operador
+    const url  = API+'?action=verificarAberto&operador='+encodeURIComponent(opSel.value)+'&implemento=';
     const res  = await fetch(url);
     const data = await res.json();
 
     if (data.aberto) {
+      // Valida carimbo — descarta registros antigos com ISO
+      if (data.carimbo && (data.carimbo.includes('T') || data.carimbo.includes('1899'))) {
+        state.abertoInfo = null;
+        document.getElementById('alertaAberto').classList.remove('visible');
+        setLoading(false);
+        return;
+      }
+
       state.abertoInfo = data;
-      const info = document.getElementById('alertaAbertoInfo');
-      info.innerHTML =
+
+      // Monta exibição — detecta "APONTAMENTO EM LOTE" no nrSerie
+      const ehLote = (data.nrSerie||'').toUpperCase().includes('LOTE') ||
+                     (data.implemento||'').toUpperCase().includes('LOTE');
+      const serieLabel = ehLote
+        ? '🔢 Apontamento em lote'
+        : (data.nrSerie ? data.nrSerie+' | '+data.implemento+' | '+data.cliente : '—');
+
+      document.getElementById('alertaAbertoInfo').innerHTML =
+        '<strong>Série:</strong> '+serieLabel+'<br>'+
         '<strong>Operação:</strong> '+data.operacao+'<br>'+
         '<strong>Código:</strong> '+(data.codItem||'—')+'<br>'+
-        '<strong>Aberto em:</strong> '+data.carimbo+'<br>'+
-        (data.qtdPlanejada ? '<strong>Qtd planejada:</strong> '+data.qtdPlanejada : '');
+        '<strong>Aberto em:</strong> '+data.carimbo+
+        (data.qtdPlanejada ? '<br><strong>Qtd planejada:</strong> '+data.qtdPlanejada : '');
       document.getElementById('alertaAberto').classList.add('visible');
     } else {
       state.abertoInfo = null;
