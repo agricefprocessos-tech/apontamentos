@@ -549,12 +549,31 @@ function gerarIdApontamento() {
 
 // Normaliza código de operador: Sheets converte '000130' → número 130.
 // Comparar como número evita falsos negativos por zeros à esquerda.
-// Formata um valor lido da planilha como data/hora no padrão pt-BR
-// Sheets pode converter strings de data em objetos Date — String(date) retorna formato en-US
+// Formata valor lido da planilha como data/hora em pt-BR (dd/MM/yyyy HH:mm:ss)
+// Cobre três casos:
+//   1. Date object  — Sheets auto-converteu a string para Date
+//   2. String inglesa — código antigo fez String(date) → "Thu May 14 2026 12:15:07 GMT-0300..."
+//   3. String já em pt-BR — retorna como está
 function formatarCarimboGs(val) {
   if (!val) return '';
+  // Caso 1: objeto Date
   if (val instanceof Date) return Utilities.formatDate(val, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
-  return String(val);
+  const s = String(val).trim();
+  if (!s) return '';
+  // Caso 3: já no formato dd/MM/yyyy
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) return s;
+  // Caso 2: string inglesa "Thu May 14 2026 12:15:07 GMT-0300 ..."
+  // Extrai componentes via regex — não depende de new Date() que pode falhar com caracteres especiais
+  const m = s.match(/\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (m) {
+    const MESES = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+    const mes = MESES[m[1]];
+    if (mes) {
+      return String(m[2]).padStart(2,'0') + '/' + String(mes).padStart(2,'0') + '/' + m[3] +
+             ' ' + m[4] + ':' + m[5] + ':' + m[6];
+    }
+  }
+  return s;
 }
 
 function mesmoOperador(a, b) {
