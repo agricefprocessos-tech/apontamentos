@@ -451,6 +451,16 @@ async function init() {
   renderOpGrid('opGrid','selecionarOperacao');
   renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
   renderParadasGrid();
+  // Event delegation para chips de lote — evita quebra por aspas nos nomes
+  document.getElementById('loteSeriesGrid').addEventListener('click', function(e) {
+    const chip = e.target.closest('.lote-serie-chip');
+    if (!chip) return;
+    const idx = parseInt(chip.dataset.idx);
+    if (isNaN(idx)) return;
+    const s = state.series[idx];
+    if (!s) return;
+    toggleLoteSerie(s.nrSerie, s.implemento, s.cliente);
+  });
   await carregarCadastros();
 }
 
@@ -830,12 +840,10 @@ function selecionarSetup(tipo) {
 function renderLoteSeriesGrid() {
   const grid = document.getElementById('loteSeriesGrid');
   if (!grid) return;
-  grid.innerHTML = state.series.map(s => {
+  // Usa data-idx em vez de onclick inline — evita quebra por aspas nos nomes (ex: HAULER 10")
+  grid.innerHTML = state.series.map((s, i) => {
     const sel = state.loteSeries.some(x => x.nrSerie === s.nrSerie);
-    const nr  = s.nrSerie.replace(/'/g,"\\'");
-    const im  = s.implemento.replace(/'/g,"\\'");
-    const cl  = s.cliente.replace(/'/g,"\\'");
-    return `<button class="lote-serie-chip${sel?' selected':''}" onclick="toggleLoteSerie('${nr}','${im}','${cl}')" id="lote-chip-${s.nrSerie}">
+    return `<button class="lote-serie-chip${sel?' selected':''}" data-idx="${i}">
       <span class="chip-nr">${s.nrSerie}</span>
       <span class="chip-info">${s.implemento}</span>
     </button>`;
@@ -857,15 +865,19 @@ async function verificarSaldoAPI(nrSerie, operacao) {
   try {
     const url  = API+'?action=verificarSaldo&nrSerie='+encodeURIComponent(nrSerie)+'&operacao='+encodeURIComponent(operacao);
     const data = await (await fetch(url)).json();
-    const box  = document.getElementById('alertaSaldoParcial');
-    const info = document.getElementById('alertaSaldoInfo');
     if (data.temSaldo && data.qtdRestante > 0) {
-      info.innerHTML = 'Havia <strong>'+data.qtdRestante+' itens restantes</strong> de uma baixa parcial anterior ('+formatarCarimbo(data.ultimaAtualizacao)+').<br>A quantidade planejada foi preenchida automaticamente.';
-      box.classList.add('visible');
+      document.getElementById('alertaSaldoInfo').innerHTML =
+        'Havia <strong>'+data.qtdRestante+' itens restantes</strong> de uma baixa parcial anterior'+
+        (data.ultimaAtualizacao ? ' ('+formatarCarimbo(data.ultimaAtualizacao)+')' : '')+
+        '.<br>A quantidade planejada foi preenchida automaticamente.';
+      // mostrar() garante remoção do section-block
+      mostrar('alertaSaldoParcial');
+      // Garante que o campo de qtd está visível e pré-preenchido
+      mostrar('campoQtdAbertura');
       const qtdEl = document.getElementById('qtdPlanejada');
       if (qtdEl && !qtdEl.value) qtdEl.value = data.qtdRestante;
     } else {
-      box.classList.remove('visible');
+      esconder('alertaSaldoParcial');
     }
   } catch { esconder('alertaSaldoParcial'); }
 }
