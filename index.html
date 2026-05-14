@@ -1,0 +1,1303 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f0f1a">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate">
+<title>AGRICEF — Apontamento</title>
+<style>
+:root {
+  --bg:#0f0f1a; --surface:#1a1a2e; --surface2:#232338; --border:#2e2e4a;
+  --accent:#4f8ef7; --green:#2ecc71; --amber:#f39c12; --red:#e74c3c;
+  --text:#f0f0ff; --text2:#8888aa; --radius:14px; --radius-sm:8px;
+}
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@500&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'DM Sans',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;max-width:480px;margin:0 auto}
+
+/* HEADER */
+.header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.header-logo{font-size:13px;font-weight:700;letter-spacing:.12em;color:var(--accent);text-transform:uppercase}
+.header-right{display:flex;align-items:center;gap:12px}
+.header-time{font-family:'DM Mono',monospace;font-size:13px;color:var(--text2)}
+.btn-admin{background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:11px;font-weight:600;padding:4px 10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;transition:all .2s}
+.btn-admin:hover{border-color:var(--accent);color:var(--accent)}
+
+/* CONTENT */
+.content{padding:16px;padding-bottom:40px}
+.page{display:none}
+.page.active{display:block}
+.section-block{display:none}
+.section-block.visible{display:block}
+
+/* STEP */
+.step-indicator{display:flex;align-items:center;gap:6px;margin-bottom:20px}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--border);transition:all .3s}
+.step-dot.active{background:var(--accent);width:24px;border-radius:4px}
+.step-dot.done{background:var(--green)}
+.step-label{font-size:12px;color:var(--text2);margin-left:4px}
+
+/* CARDS */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.section-title{font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text2);margin-bottom:10px}
+.divider{height:1px;background:var(--border);margin:16px 0}
+
+/* ALERTA ABERTO */
+.alert-aberto{background:#1a120a;border:1.5px solid var(--amber);border-radius:var(--radius);padding:16px;margin-bottom:12px;display:none}
+.alert-aberto.visible{display:block}
+.alert-aberto-title{font-size:13px;font-weight:700;color:var(--amber);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.alert-aberto-info{font-size:13px;color:#c87d3a;line-height:1.7;margin-bottom:12px}
+.alert-aberto-info strong{color:var(--text);font-weight:600}
+.btn-fechar-aberto{width:100%;background:var(--amber);color:#000;font-family:'DM Sans',system-ui,sans-serif;font-size:14px;font-weight:700;border:none;border-radius:var(--radius-sm);padding:12px;cursor:pointer;transition:all .2s}
+.btn-fechar-aberto:active{opacity:.85;transform:scale(.98)}
+
+/* FORM */
+select,input[type="text"],input[type="number"],input[type="password"],textarea{
+  width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);
+  color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:15px;padding:12px 14px;
+  appearance:none;-webkit-appearance:none;outline:none;transition:border-color .2s}
+select:focus,input:focus,textarea:focus{border-color:var(--accent)}
+select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888aa' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px}
+select option{background:#1a1a2e}
+input[type="number"]{-moz-appearance:textfield}
+input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none}
+label{display:block;font-size:12px;font-weight:500;color:var(--text2);margin-bottom:6px;margin-top:12px}
+label:first-child{margin-top:0}
+.field-required::after{content:' *';color:var(--accent)}
+
+/* READONLY */
+.field-readonly{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:15px;color:var(--text2);font-family:'DM Mono',monospace}
+.field-readonly.highlight{color:var(--text);border-color:var(--accent)}
+
+/* TIPO BUTTONS */
+.tipo-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tipo-btn{background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;font-weight:500;padding:12px 8px;text-align:center;cursor:pointer;transition:all .2s;line-height:1.3}
+.tipo-btn:active{transform:scale(.97)}
+.tipo-btn.sel-blue{border-color:var(--accent);color:var(--text);background:rgba(79,142,247,.12)}
+.tipo-btn.sel-green{border-color:var(--green);color:var(--green);background:rgba(46,204,113,.1)}
+.tipo-btn.sel-amber{border-color:var(--amber);color:var(--amber);background:rgba(243,156,18,.1)}
+.tipo-btn.sel-red{border-color:var(--red);color:var(--red);background:rgba(231,76,60,.1)}
+.tipo-btn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+
+/* OP BUTTONS */
+.op-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.op-btn{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;font-weight:500;padding:10px 8px;text-align:left;cursor:pointer;transition:all .2s;display:flex;flex-direction:column;gap:2px}
+.op-btn .op-code{font-family:'DM Mono',monospace;font-size:10px}
+.op-btn .op-name{font-size:13px;color:var(--text)}
+.op-btn.selected{border-color:var(--accent);background:rgba(79,142,247,.1)}
+.op-btn.selected .op-name{color:var(--accent)}
+.op-btn:active{transform:scale(.97)}
+
+/* PARADA */
+.parada-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.parada-btn{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;font-weight:500;padding:10px;text-align:left;cursor:pointer;transition:all .2s;line-height:1.4}
+.parada-btn.selected{border-color:var(--amber);background:rgba(243,156,18,.1);color:var(--amber)}
+.parada-btn:active{transform:scale(.97)}
+
+/* QUANTIDADE */
+.qtd-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:0}
+.qtd-label{font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px;text-transform:uppercase;letter-spacing:.06em}
+.qtd-saldo{background:rgba(46,204,113,.1);border:1px solid rgba(46,204,113,.3);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:var(--green);text-align:center;margin-top:8px;display:none}
+.qtd-saldo.visible{display:block}
+
+/* LOTE */
+.lote-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.lote-item span{font-size:13px;color:var(--text);font-family:'DM Mono',monospace}
+.lote-remove{background:none;border:none;color:var(--red);font-size:20px;cursor:pointer;padding:0 4px;line-height:1}
+.lote-add-row{display:flex;gap:8px;margin-top:8px}
+.btn-add{background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius-sm);color:var(--accent);font-size:22px;font-weight:300;padding:0 16px;cursor:pointer;transition:all .2s}
+.btn-add:active{background:rgba(79,142,247,.1)}
+/* LOTE CHIPS */
+.lote-serie-chip{background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;padding:9px 11px;cursor:pointer;transition:all .2s;display:inline-flex;flex-direction:column;gap:2px;text-align:left}
+.lote-serie-chip .chip-nr{font-family:'DM Mono',monospace;font-size:11px;color:var(--text);font-weight:600}
+.lote-serie-chip .chip-info{font-size:11px;color:var(--text2)}
+.lote-serie-chip.selected{border-color:var(--green);background:rgba(46,204,113,.12)}
+.lote-serie-chip.selected .chip-nr{color:var(--green)}
+.lote-serie-chip:active{transform:scale(.97)}
+/* SALDO PARCIAL */
+.alert-saldo{background:rgba(243,156,18,.08);border:1.5px solid var(--amber);border-radius:var(--radius-sm);padding:12px 14px;margin-top:10px;display:none}
+.alert-saldo.visible{display:block}
+.alert-saldo-title{font-size:13px;font-weight:700;color:var(--amber);margin-bottom:4px}
+.alert-saldo-info{font-size:12px;color:#c87d3a;line-height:1.6}
+
+/* BUTTONS */
+.btn-submit{width:100%;background:var(--accent);color:#fff;font-family:'DM Sans',system-ui,sans-serif;font-size:16px;font-weight:700;border:none;border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s;margin-top:8px;letter-spacing:.02em}
+.btn-submit:active{transform:scale(.98);opacity:.9}
+.btn-submit:disabled{background:var(--border);color:var(--text2);cursor:not-allowed;transform:none}
+.btn-secondary{width:100%;background:transparent;color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:14px;font-weight:500;border:1px solid var(--border);border-radius:var(--radius);padding:13px;cursor:pointer;transition:all .2s;margin-top:8px}
+.btn-secondary:active{background:var(--surface2)}
+.btn-danger{background:rgba(231,76,60,.15);color:var(--red);border:1px solid rgba(231,76,60,.3);border-radius:var(--radius-sm);padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-danger:active{background:rgba(231,76,60,.25)}
+
+/* INFO BOX */
+.info-box{background:var(--surface2);border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:var(--text2);line-height:1.6;margin-top:8px}
+
+/* SUCCESS */
+.success-screen{display:none;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;text-align:center;padding:40px 20px}
+.success-screen.visible{display:flex}
+.success-icon{font-size:64px;margin-bottom:20px}
+.success-title{font-size:22px;font-weight:700;margin-bottom:8px}
+.success-sub{font-size:14px;color:var(--text2);margin-bottom:32px;line-height:1.6}
+
+/* ADMIN */
+.admin-tabs{display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:16px}
+.admin-tab{flex:1;background:var(--surface2);border:none;color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:13px;font-weight:500;padding:10px;cursor:pointer;transition:all .2s}
+.admin-tab.active{background:var(--accent);color:#fff}
+.cadastro-item{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cadastro-item-info{flex:1;min-width:0}
+.cadastro-item-code{font-family:'DM Mono',monospace;font-size:11px;color:var(--text2)}
+.cadastro-item-name{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.form-row{display:flex;gap:8px}
+.form-row > *{flex:1}
+.admin-lock{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;gap:16px}
+.pin-display{font-family:'DM Mono',monospace;font-size:32px;letter-spacing:.3em;color:var(--accent);min-height:48px;text-align:center}
+.pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;width:240px}
+.pin-key{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',system-ui,sans-serif;font-size:20px;font-weight:500;padding:16px;cursor:pointer;transition:all .15s;text-align:center}
+.pin-key:active{background:var(--surface);transform:scale(.95)}
+.pin-key.del{color:var(--red);font-size:16px}
+
+/* LOADING */
+.loading-overlay{position:fixed;inset:0;background:rgba(15,15,26,.7);display:none;align-items:center;justify-content:center;z-index:200}
+.loading-overlay.visible{display:flex}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:10px 20px;font-size:13px;color:var(--text);z-index:999;transition:transform .3s ease;white-space:nowrap;pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.error{border-color:var(--red);color:var(--red)}
+.toast.success{border-color:var(--green);color:var(--green)}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
+
+<div class="header">
+  <div class="header-logo">⚙ AGRICEF</div>
+  <div class="header-right">
+    <div class="header-time" id="relogio">--:--</div>
+    <button class="btn-admin" onclick="abrirAdmin()">ADMIN</button>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FORMULÁRIO                                                   -->
+<!-- ============================================================ -->
+<div class="content" id="formContent">
+
+  <div class="step-indicator">
+    <div class="step-dot active" id="dot1"></div>
+    <div class="step-dot" id="dot2"></div>
+    <div class="step-dot" id="dot3"></div>
+    <span class="step-label" id="stepLabel">Identificação</span>
+  </div>
+
+  <!-- STEP 1 -->
+  <div id="step1">
+    <div class="card">
+      <div class="section-title">Operador</div>
+      <label class="field-required">Nome do operador</label>
+      <select id="operador" onchange="onOperadorChange()"><option value="">Carregando...</option></select>
+      <label class="field-required">Nº Série / Implemento / Cliente</label>
+      <select id="implemento" onchange="onImplementoChange()"><option value="">Carregando...</option></select>
+    </div>
+
+    <!-- Botão de recarregar cadastros (visível apenas em caso de falha de conexão) -->
+    <button id="btnRecarregarCadastros" class="btn-secondary" style="display:none;margin-top:8px;font-size:13px" onclick="recarregarCadastros()">↺ Atualizar lista de operadores/séries</button>
+
+    <!-- ALERTA POKA-YOKE: apontamento em aberto -->
+    <div class="alert-aberto" id="alertaAberto">
+      <div class="alert-aberto-title">⚠ Apontamento em aberto</div>
+      <div class="alert-aberto-info" id="alertaAbertoInfo"></div>
+      <button class="btn-fechar-aberto" onclick="iniciarFechamentoRapido()">
+        Fechar este apontamento agora →
+      </button>
+    </div>
+
+    <button class="btn-submit" onclick="irStep2()" id="btnContinuar">Continuar →</button>
+  </div>
+
+  <!-- STEP 2 -->
+  <div id="step2" class="section-block">
+
+    <div class="card">
+      <div class="section-title">Tipo de apontamento</div>
+      <div class="tipo-grid">
+        <button class="tipo-btn" onclick="selecionarTipo('ABERTURA')"          id="btn-ABERTURA">🟢 Abertura</button>
+        <button class="tipo-btn" onclick="selecionarTipo('FECHAMENTO')"         id="btn-FECHAMENTO">🔵 Fechamento</button>
+        <button class="tipo-btn" onclick="selecionarTipo('INICIO_RETRABALHO')"  id="btn-INICIO_RETRABALHO">🔴 Início retrabalho</button>
+        <button class="tipo-btn" onclick="selecionarTipo('TERMINO_RETRABALHO')" id="btn-TERMINO_RETRABALHO">🔴 Término retrabalho</button>
+        <button class="tipo-btn" onclick="selecionarTipo('INICIO_PARADA')"      id="btn-INICIO_PARADA">🟡 Início parada</button>
+        <button class="tipo-btn" onclick="selecionarTipo('TERMINO_PARADA')"     id="btn-TERMINO_PARADA">🟡 Término parada</button>
+      </div>
+    </div>
+
+    <!-- BLOCO FECHAMENTO INTELIGENTE (pré-preenchido) -->
+    <div class="card section-block" id="blocoFechamentoInteligente">
+      <div class="section-title">Dados da abertura</div>
+      <label>Operação</label>
+      <div class="field-readonly highlight" id="fechOpLabel">—</div>
+      <label>Código do item</label>
+      <div class="field-readonly highlight" id="fechCodItemLabel">—</div>
+      <label>Implemento</label>
+      <div class="field-readonly" id="fechImplementoLabel">—</div>
+      <label>Aberto em</label>
+      <div class="field-readonly" id="fechCarimboLabel">—</div>
+      <div class="divider"></div>
+      <div class="section-title">Fechamento</div>
+      <div id="blocoQtdFechamento" class="section-block">
+        <div class="qtd-row">
+          <div>
+            <div class="qtd-label">Qtd planejada</div>
+            <div class="field-readonly" id="fechQtdPlanejadaLabel">—</div>
+          </div>
+          <div>
+            <div class="qtd-label">Qtd realizada * <span style="font-size:10px;font-weight:400;color:var(--text2)">(0 se nenhuma)</span></div>
+            <input type="number" id="fechQuantidade" placeholder="0" min="0" step="1" inputmode="numeric" oninput="calcularSaldo()">
+          </div>
+        </div>
+        <div class="qtd-saldo" id="saldoBox"></div>
+      </div>
+      <label>Observação</label>
+      <input type="text" id="fechObs" placeholder="Opcional">
+    </div>
+
+    <!-- BLOCO PRODUÇÃO (abertura) -->
+    <div class="card section-block" id="blocoProducao">
+      <div class="section-title">Operação de produção</div>
+      <div class="op-grid" id="opGrid"></div>
+      <div class="divider"></div>
+      <label class="field-required">Código do item</label>
+      <input type="text" id="codItem" placeholder="Ex: 509419" oninput="onCodItemInput()">
+      <div class="section-block" id="campoQtdAbertura">
+        <div class="qtd-row">
+          <div>
+            <div class="qtd-label">Qtd planejada *</div>
+            <input type="number" id="qtdPlanejada" placeholder="0" min="1" step="1" inputmode="numeric">
+          </div>
+          <div style="display:flex;align-items:flex-end">
+            <div class="info-box" style="margin:0;font-size:11px">Quantidade total a produzir nesta operação</div>
+          </div>
+        </div>
+      </div>
+      <label>Observação</label>
+      <input type="text" id="obs1" placeholder="Opcional">
+    </div>
+
+    <!-- ALERTA SALDO PARCIAL -->
+    <div class="alert-saldo section-block" id="alertaSaldoParcial">
+      <div class="alert-saldo-title">📋 Baixa parcial anterior</div>
+      <div class="alert-saldo-info" id="alertaSaldoInfo"></div>
+    </div>
+
+    <!-- BLOCO RETRABALHO -->
+    <div class="card section-block" id="blocoRetrabalho">
+      <div class="section-title">Tipo de retrabalho</div>
+      <div class="tipo-grid">
+        <button class="tipo-btn" onclick="selecionarRetrabalho('RNC')"        id="rt-RNC">RNC</button>
+        <button class="tipo-btn" onclick="selecionarRetrabalho('MODIFICAÇÃO')" id="rt-MODIFICAÇÃO">Modificação</button>
+      </div>
+      <div class="section-block" id="blocoRNC">
+        <label class="field-required">Nº da RNC</label>
+        <input type="text" id="numRNC" placeholder="Ex: RNC-2024-001">
+      </div>
+      <div class="section-block" id="blocoOpRetrabalho">
+        <div class="divider"></div>
+        <div class="section-title">Operação do retrabalho</div>
+        <div class="op-grid" id="opGridRetrabalho"></div>
+      </div>
+    </div>
+
+    <!-- BLOCO PARADA -->
+    <div class="card section-block" id="blocoParada">
+      <div class="section-title">Tipo de parada</div>
+      <div class="parada-grid" id="paradaGrid"></div>
+      <div class="section-block" id="blocoSetup">
+        <div class="divider"></div>
+        <div class="section-title">Operação de set-up</div>
+        <div class="parada-grid">
+          <button class="parada-btn" onclick="selecionarSetup(this,'PREPARAÇÃO DE MATÉRIA PRIMA')">Preparação de matéria prima</button>
+          <button class="parada-btn" onclick="selecionarSetup(this,'AJUSTE DE MÁQUINA')">Ajuste de máquina</button>
+          <button class="parada-btn" onclick="selecionarSetup(this,'INVENTÁRIO')">Inventário</button>
+          <button class="parada-btn" onclick="selecionarSetup(this,'MOVIMENTAÇÃO LOGÍSTICA')">Movimentação logística</button>
+        </div>
+        <label>Observação</label>
+        <input type="text" id="obs2" placeholder="Opcional">
+      </div>
+    </div>
+
+    <!-- BLOCO LOTE -->
+    <div class="card section-block" id="blocoLote">
+      <div class="section-title">Apontamento em lote</div>
+      <div class="info-box">Toque nas séries produzidas. Um registro será criado para cada uma.</div>
+      <div class="info-box" style="margin-top:6px;border-color:rgba(243,156,18,.3);color:var(--amber);font-size:11px">
+        ℹ Se alguma série possui saldo de baixa parcial anterior, informe a quantidade planejada considerando apenas as peças restantes.
+      </div>
+      <div id="loteSeriesGrid" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
+      <div id="loteSelCount" style="margin-top:8px;font-size:12px;color:var(--green);font-weight:600;text-align:center"></div>
+    </div>
+
+    <button class="btn-submit" onclick="enviarApontamento()" id="btnEnviar">Registrar apontamento</button>
+    <button class="btn-secondary" onclick="voltarStep1()">← Voltar</button>
+  </div>
+
+</div>
+
+<!-- SUCCESS -->
+<div class="success-screen" id="successScreen">
+  <div class="success-icon">✅</div>
+  <div class="success-title">Registrado!</div>
+  <div class="success-sub" id="successMsg"></div>
+  <button class="btn-submit" style="max-width:280px" onclick="novoApontamento()">Novo apontamento</button>
+</div>
+
+<!-- ============================================================ -->
+<!-- ADMIN                                                        -->
+<!-- ============================================================ -->
+<div class="content page" id="pageAdmin" style="display:none">
+  <div id="adminLock">
+    <div class="admin-lock">
+      <div class="section-title">Área do líder — PIN de acesso</div>
+      <div class="pin-display" id="pinDisplay">____</div>
+      <div class="pin-pad">
+        <button class="pin-key" onclick="pinKey('1')">1</button>
+        <button class="pin-key" onclick="pinKey('2')">2</button>
+        <button class="pin-key" onclick="pinKey('3')">3</button>
+        <button class="pin-key" onclick="pinKey('4')">4</button>
+        <button class="pin-key" onclick="pinKey('5')">5</button>
+        <button class="pin-key" onclick="pinKey('6')">6</button>
+        <button class="pin-key" onclick="pinKey('7')">7</button>
+        <button class="pin-key" onclick="pinKey('8')">8</button>
+        <button class="pin-key" onclick="pinKey('9')">9</button>
+        <button class="pin-key del" onclick="pinDel()">⌫</button>
+        <button class="pin-key" onclick="pinKey('0')">0</button>
+        <button class="pin-key" onclick="pinOk()" style="color:var(--green)">✓</button>
+      </div>
+      <button class="btn-secondary" style="max-width:200px" onclick="fecharAdmin()">Cancelar</button>
+    </div>
+  </div>
+  <div id="adminContent" style="display:none">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div style="flex:1"><div class="section-title" style="margin:0">Área do líder</div><div style="font-size:16px;font-weight:600;margin-top:2px">Gerenciar cadastros</div></div>
+      <button class="btn-secondary" style="width:auto;padding:8px 16px;margin:0" onclick="fecharAdmin()">Sair</button>
+    </div>
+    <div class="admin-tabs">
+      <button class="admin-tab active" onclick="switchTab('operadores')">Operadores</button>
+      <button class="admin-tab" onclick="switchTab('series')">Séries</button>
+    </div>
+    <div id="tabOperadores">
+      <div class="card">
+        <div class="section-title">Adicionar operador</div>
+        <div class="form-row">
+          <div><label>Código</label><input type="text" id="newOpCodigo" placeholder="000101"></div>
+          <div style="flex:2"><label>Nome completo</label><input type="text" id="newOpNome" placeholder="NOME DO OPERADOR"></div>
+        </div>
+        <button class="btn-submit" style="margin-top:12px" onclick="adicionarOperador()">Adicionar operador</button>
+      </div>
+      <div class="section-title">Operadores ativos</div>
+      <div id="listaOperadores"></div>
+    </div>
+    <div id="tabSeries" style="display:none">
+      <div class="card">
+        <div class="section-title">Adicionar nº de série</div>
+        <label>Nº de série</label><input type="text" id="newSerNr" placeholder="22000089">
+        <div class="form-row" style="margin-top:0">
+          <div><label>Implemento</label><input type="text" id="newSerImpl" placeholder='HAULER 10"'></div>
+          <div><label>Cliente</label><input type="text" id="newSerCli" placeholder="ATVOS"></div>
+        </div>
+        <button class="btn-submit" style="margin-top:12px" onclick="adicionarSerie()">Adicionar série</button>
+      </div>
+      <div class="section-title">Séries ativas</div>
+      <div id="listaSeries"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ===================== CONFIG =====================
+const API     = 'https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
+const PIN_ADMIN = '1234';
+
+// Operações que EXIGEM quantidade
+const OPS_REQUEREM_QTD = ['0010','0020','0030','0040','0050','0060','0080'];
+// Cortar, Furar, Mont.Caldeiraria, Soldar, Lixar, Pintar, Inspecionar
+
+// ===================== ESTADO =====================
+const state = {
+  operador:'', operadorNome:'', nrSerie:'', implemento:'', cliente:'',
+  tipo:'', operacao:'', opRetrabalho:'', retrabalho:'', numRNC:'',
+  parada:'', setup:'', lote:[], loteSeries:[], abertoInfo:null,
+  modoFechamentoRapido: false, modoLote: false,
+  operadores:[], series:[],
+};
+
+const operacoes = [
+  {cod:'0010',nome:'Cortar'},{cod:'0020',nome:'Furar'},{cod:'0030',nome:'Mont. caldeiraria'},
+  {cod:'0040',nome:'Soldar'},{cod:'0050',nome:'Lixar'},{cod:'0060',nome:'Pintar'},
+  {cod:'0070',nome:'Mont. mec./elét.'},{cod:'0080',nome:'Inspecionar'},
+  {cod:'0090',nome:'Calafetar'},{cod:'0100',nome:'Adesivar'},
+  {cod:'0101',nome:'Testes'},{cod:'0102',nome:'Treinamento'},
+];
+
+const paradas = [
+  'Set-up','Falta de material','Quebra de máquina','Reunião',
+  'Treinamento','Aguardando desenho','Aguardando PCP',
+  'Aguardando engenharia','Falta de energia','Aguardando movimentação',
+  'Organização e limpeza','Aguardando separação almoxarifado','Integração',
+];
+
+// ===================== INIT =====================
+async function init() {
+  iniciarRelogio();
+  renderOpGrid('opGrid','selecionarOperacao');
+  renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
+  renderParadasGrid();
+  // Event delegation para chips de lote — evita quebra por aspas nos nomes
+  document.getElementById('loteSeriesGrid').addEventListener('click', function(e) {
+    const chip = e.target.closest('.lote-serie-chip');
+    if (!chip) return;
+    const idx = parseInt(chip.dataset.idx);
+    if (isNaN(idx)) return;
+    const s = state.series[idx];
+    if (!s) return;
+    toggleLoteSerie(s.nrSerie, s.implemento, s.cliente);
+  });
+  await carregarCadastros();
+}
+
+function iniciarRelogio() {
+  const el  = document.getElementById('relogio');
+  const tick = () => {
+    const n = new Date();
+    el.textContent = pad(n.getHours())+':'+pad(n.getMinutes());
+  };
+  tick(); setInterval(tick,1000);
+}
+
+const pad = n => String(n).padStart(2,'0');
+
+function formatarCarimbo(carimbo) {
+  if (!carimbo) return '—';
+  const s = String(carimbo);
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) return s; // já em pt-BR
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+
+        ' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    }
+  } catch {}
+  return s;
+}
+
+function carimboBrowser() {
+  const n = new Date();
+  return pad(n.getDate())+'/'+pad(n.getMonth()+1)+'/'+n.getFullYear()+
+    ' '+pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
+}
+
+// ===================== CADASTROS =====================
+const CACHE_KEY = 'agricef_cadastros';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+function salvarCacheLocal(operadores, series) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      ts: Date.now(), operadores, series
+    }));
+  } catch { /* localStorage pode estar cheio — ignora silenciosamente */ }
+}
+
+function lerCacheLocal() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const cache = JSON.parse(raw);
+    if (!cache.ts || (Date.now() - cache.ts) > CACHE_TTL) return null;
+    return cache;
+  } catch { return null; }
+}
+
+async function carregarCadastros(forcar = false) {
+  setLoading(true);
+  // Se não forçar recarregamento, tenta usar cache local válido
+  if (!forcar) {
+    const cache = lerCacheLocal();
+    if (cache) {
+      state.operadores = cache.operadores;
+      state.series     = cache.series;
+      popularSelectOperador();
+      popularSelectImplemento();
+      renderListaAdmin();
+      setLoading(false);
+      return;
+    }
+  }
+  let tentativa = 0;
+  const maxTentativas = 2;
+  while (tentativa < maxTentativas) {
+    try {
+      const res  = await fetch(API+'?action=getCadastros');
+      const data = await res.json();
+      if (data.success) {
+        state.operadores = data.operadores;
+        state.series     = data.series;
+        salvarCacheLocal(data.operadores, data.series);
+        break; // sucesso — sai do loop
+      } else {
+        usarFallback(); break;
+      }
+    } catch {
+      tentativa++;
+      if (tentativa < maxTentativas) {
+        // Aguarda 3s antes do retry
+        await new Promise(r => setTimeout(r, 3000));
+      } else {
+        usarFallback();
+      }
+    }
+  }
+  popularSelectOperador();
+  popularSelectImplemento();
+  renderListaAdmin();
+  setLoading(false);
+}
+
+async function recarregarCadastros() {
+  const btn = document.getElementById('btnRecarregarCadastros');
+  if (btn) btn.style.display = 'none';
+  await carregarCadastros(true); // força recarregamento ignorando cache
+}
+
+function popularSelectOperador() {
+  const sel = document.getElementById('operador');
+  sel.innerHTML = '<option value="">Selecione o operador...</option>';
+  state.operadores.forEach(op => {
+    const o = document.createElement('option');
+    o.value = op.codigo;
+    o.textContent = op.codigo+' — '+op.nome;
+    sel.appendChild(o);
+  });
+}
+
+function popularSelectImplemento() {
+  const sel = document.getElementById('implemento');
+  sel.innerHTML = '<option value="">Selecione o implemento...</option>';
+  const loteOpt = document.createElement('option');
+  loteOpt.value = '__LOTE__';
+  loteOpt.textContent = '🔢 APONTAMENTO EM LOTE';
+  sel.appendChild(loteOpt);
+  state.series.forEach(s => {
+    const o = document.createElement('option');
+    o.value = JSON.stringify({nrSerie:s.nrSerie, implemento:s.implemento, cliente:s.cliente});
+    o.textContent = s.nrSerie+' — '+s.implemento+' — '+s.cliente;
+    sel.appendChild(o);
+  });
+}
+
+function usarFallback() {
+  // Tenta usar cache local expirado como último recurso antes de zerar as listas
+  const cacheAntigo = (() => {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  })();
+  if (cacheAntigo && cacheAntigo.operadores && cacheAntigo.series) {
+    state.operadores = cacheAntigo.operadores;
+    state.series     = cacheAntigo.series;
+    showToast('Usando dados em cache (sem conexão). Toque em "Atualizar" para recarregar.','error');
+  } else {
+    state.operadores = [];
+    state.series     = [];
+    showToast('Sem conexão com a planilha. Toque em "Atualizar" para tentar novamente.','error');
+  }
+  // Exibe botão de recarregamento visível ao usuário
+  const btnRecarregar = document.getElementById('btnRecarregarCadastros');
+  if (btnRecarregar) btnRecarregar.style.display = 'block';
+}
+
+// ===================== STEP 1 =====================
+// AbortController para cancelar requisições anteriores de verificarAberto (evita race condition)
+let _verificarAbortCtrl = null;
+// Timer de debounce para evitar múltiplas chamadas rápidas ao trocar operador
+let _verificarDebounceTimer = null;
+
+function onOperadorChange() {
+  document.getElementById('alertaAberto').classList.remove('visible');
+  state.abertoInfo = null;
+  // Debounce: aguarda 300ms antes de disparar a verificação
+  clearTimeout(_verificarDebounceTimer);
+  _verificarDebounceTimer = setTimeout(verificarAbertoSeCompleto, 300);
+}
+
+function onImplementoChange() {
+  const val = document.getElementById('implemento').value;
+  state.modoLote = (val === '__LOTE__');
+  atualizarBotoesTipo();
+}
+
+async function verificarAbertoSeCompleto() {
+  const opSel  = document.getElementById('operador');
+  // Verifica assim que operador for selecionado (independe da série)
+  if (!opSel.value) return;
+
+  // Cancela requisição anterior se ainda estiver em andamento
+  if (_verificarAbortCtrl) { _verificarAbortCtrl.abort(); }
+  _verificarAbortCtrl = new AbortController();
+  const signal = _verificarAbortCtrl.signal;
+
+  setLoading(true);
+  try {
+    // Busca por operador apenas — regra: um aberto por operador
+    const url  = API+'?action=verificarAberto&operador='+encodeURIComponent(opSel.value)+'&implemento=';
+    const res  = await fetch(url, { signal });
+    const data = await res.json();
+
+    if (data.aberto) {
+      state.abertoInfo = data;
+
+      const ehLote = (data.nrSerie||'').toUpperCase().includes('LOTE') ||
+                     (data.implemento||'').toUpperCase().includes('LOTE');
+      const serieLabel = ehLote
+        ? '🔢 Apontamento em lote'
+        : (data.nrSerie ? data.nrSerie+' | '+data.implemento+' | '+data.cliente : '—');
+
+      document.getElementById('alertaAbertoInfo').innerHTML =
+        '<strong>Série:</strong> '+serieLabel+'<br>'+
+        '<strong>Operação:</strong> '+data.operacao+'<br>'+
+        '<strong>Código:</strong> '+(data.codItem||'—')+'<br>'+
+        '<strong>Aberto em:</strong> '+formatarCarimbo(data.carimbo)+
+        (data.qtdPlanejada ? '<br><strong>Qtd planejada:</strong> '+data.qtdPlanejada : '');
+      document.getElementById('alertaAberto').classList.add('visible');
+    } else {
+      state.abertoInfo = null;
+      document.getElementById('alertaAberto').classList.remove('visible');
+    }
+  } catch (err) {
+    // Ignora erros de abort (requisição cancelada intencionalmente)
+    if (err && err.name !== 'AbortError') { state.abertoInfo = null; }
+  } finally { setLoading(false); }
+}
+
+async function irStep2() {
+  const opSel  = document.getElementById('operador');
+  const impSel = document.getElementById('implemento');
+  if (!opSel.value)  { showToast('Selecione o operador','error'); return; }
+  if (!impSel.value) { showToast('Selecione o implemento','error'); return; }
+
+  state.operador     = opSel.value;
+  state.operadorNome = opSel.options[opSel.selectedIndex].text;
+
+  if (impSel.value === '__LOTE__') {
+    state.modoLote   = true;
+    state.nrSerie    = '';
+    state.implemento = 'LOTE';
+    state.cliente    = '';
+  } else {
+    state.modoLote   = false;
+    const imp        = JSON.parse(impSel.value);
+    state.nrSerie    = imp.nrSerie;
+    state.implemento = imp.implemento;
+    state.cliente    = imp.cliente;
+  }
+
+  mostrar('step2'); esconder('step1');
+  atualizarSteps(2);
+  atualizarBotoesTipo();
+}
+
+function voltarStep1() {
+  esconder('step2'); mostrar('step1');
+  limparStep2(); atualizarSteps(1);
+  state.modoFechamentoRapido = false;
+}
+
+function atualizarBotoesTipo() {
+  const temAberto = !!state.abertoInfo;
+  const tiposAbertura = ['ABERTURA','INICIO_RETRABALHO','INICIO_PARADA'];
+  tiposAbertura.forEach(t => {
+    const btn = document.getElementById('btn-'+t);
+    if (temAberto) {
+      btn.disabled = true;
+      btn.title = 'Feche o apontamento em aberto primeiro';
+    } else {
+      btn.disabled = false;
+      btn.title = '';
+    }
+  });
+}
+
+// ===================== FECHAMENTO RÁPIDO =====================
+function iniciarFechamentoRapido() {
+  if (!state.abertoInfo) return;
+
+  const opSel  = document.getElementById('operador');
+  const impSel = document.getElementById('implemento');
+  if (!opSel.value)  { showToast('Selecione o operador','error'); return; }
+  if (!impSel.value) { showToast('Selecione o implemento','error'); return; }
+
+  state.operador     = opSel.value;
+  state.operadorNome = opSel.options[opSel.selectedIndex].text;
+  if (impSel.value && impSel.value !== '__LOTE__') {
+    const imp = JSON.parse(impSel.value);
+    state.nrSerie    = imp.nrSerie;
+    state.implemento = imp.implemento;
+    state.cliente    = imp.cliente;
+  }
+
+  state.modoFechamentoRapido = true;
+  state.tipo = 'FECHAMENTO';
+
+  mostrar('step2'); esconder('step1');
+  atualizarSteps(3);
+
+  // Marca botão fechamento
+  document.querySelectorAll('.tipo-btn').forEach(b => b.className='tipo-btn');
+  document.getElementById('btn-FECHAMENTO').classList.add('sel-blue');
+  atualizarBotoesTipo();
+
+  // Preenche bloco de fechamento inteligente
+  const info = state.abertoInfo;
+  document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
+  document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
+  const ehLoteRapido = (info.implemento||'').toUpperCase().includes('LOTE') || (info.nrSerie||'').toUpperCase().includes('LOTE');
+  document.getElementById('fechImplementoLabel').textContent = ehLoteRapido
+    ? '🔢 Apontamento em lote'
+    : [info.nrSerie, info.implemento, info.cliente].filter(Boolean).join(' | ') || '—';
+  document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
+  document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+
+  // Mostra campo quantidade só se operação exige
+  const codOp = (info.operacao||'').substring(0,4);
+  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) {
+    mostrar('blocoQtdFechamento');
+  }
+
+  // Esconde outros blocos, mostra fechamento inteligente
+  ['blocoProducao','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
+  mostrar('blocoFechamentoInteligente');
+}
+
+// ===================== STEP 2 =====================
+function selecionarTipo(tipo) {
+  if (document.getElementById('btn-'+tipo).disabled) return;
+
+  document.querySelectorAll('.tipo-btn').forEach(b => {
+    if(!b.disabled) b.className='tipo-btn';
+  });
+
+  state.tipo = tipo;
+  state.modoFechamentoRapido = false;
+  const btn = document.getElementById('btn-'+tipo);
+  if (tipo==='ABERTURA'||tipo.includes('INICIO'))   btn.classList.add('sel-green');
+  else if (tipo.includes('PARADA'))                 btn.classList.add('sel-amber');
+  else if (tipo.includes('RETRABALHO'))             btn.classList.add('sel-red');
+  else                                              btn.classList.add('sel-blue');
+
+  ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
+
+  if (tipo==='ABERTURA') {
+    mostrar('blocoProducao');
+    esconder('alertaSaldoParcial');
+    if (state.modoLote) { mostrar('blocoLote'); renderLoteSeriesGrid(); }
+  }
+  else if (tipo==='FECHAMENTO')         { mostrar('blocoFechamentoInteligente'); preencherFechamentoSeAberto(); }
+  else if (tipo.includes('RETRABALHO')) mostrar('blocoRetrabalho');
+  else if (tipo.includes('PARADA'))     mostrar('blocoParada');
+
+  atualizarSteps(3);
+}
+
+function preencherFechamentoSeAberto() {
+  const info = state.abertoInfo;
+  if (!info) {
+    esconder('blocoFechamentoInteligente');
+    mostrar('blocoProducao');
+    return;
+  }
+  const ehLote = (info.implemento||'').toUpperCase().includes('LOTE');
+  document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
+  document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
+  document.getElementById('fechImplementoLabel').textContent = ehLote
+    ? '🔢 Apontamento em lote'
+    : (info.nrSerie||'')+' | '+(info.implemento||'')+' | '+(info.cliente||'');
+  document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
+  document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+  const codOp = (info.operacao||'').substring(0,4);
+  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
+  else esconder('blocoQtdFechamento');
+  mostrar('blocoFechamentoInteligente');
+}
+
+function calcularSaldo() {
+  const planejada = Number(document.getElementById('fechQtdPlanejadaLabel').textContent)||0;
+  const qtdInput  = document.getElementById('fechQuantidade').value;
+  const realizada = qtdInput === '' ? NaN : Number(qtdInput);
+  const box = document.getElementById('saldoBox');
+  // Esconde o box se planejada não disponível ou campo vazio
+  if (!planejada || isNaN(realizada)) { box.classList.remove('visible'); return; }
+  const saldo = planejada - realizada;
+  box.classList.add('visible');
+  if (saldo > 0) {
+    box.style.background='rgba(243,156,18,.1)'; box.style.color='var(--amber)';
+    box.style.borderColor='rgba(243,156,18,.3)';
+    box.textContent = 'Saldo restante: '+saldo+' itens';
+  } else if (saldo === 0) {
+    box.style.background='rgba(46,204,113,.1)'; box.style.color='var(--green)';
+    box.style.borderColor='rgba(46,204,113,.3)';
+    box.textContent = '✓ Produção completa';
+  } else {
+    box.style.background='rgba(231,76,60,.1)'; box.style.color='var(--red)';
+    box.style.borderColor='rgba(231,76,60,.3)';
+    box.textContent = 'Atenção: realizado excede planejado em '+(Math.abs(saldo))+' itens';
+  }
+}
+
+function renderOpGrid(id, fn) {
+  document.getElementById(id).innerHTML = operacoes.map(op =>
+    `<button class="op-btn" onclick="${fn}('${op.cod}')" id="${id}-${op.cod}">
+      <span class="op-code">${op.cod}</span><span class="op-name">${op.nome}</span>
+    </button>`).join('');
+}
+
+function renderParadasGrid() {
+  document.getElementById('paradaGrid').innerHTML = paradas.map(p =>
+    `<button class="parada-btn" onclick="selecionarParada(this,'${p.replace(/'/g,"\\'")}'">${p}</button>`).join('');
+}
+
+function selecionarOperacao(cod) {
+  document.querySelectorAll('#opGrid .op-btn').forEach(b=>b.classList.remove('selected'));
+  document.getElementById('opGrid-'+cod).classList.add('selected');
+  state.operacao = cod;
+  if (OPS_REQUEREM_QTD.includes(cod)) mostrar('campoQtdAbertura');
+  else esconder('campoQtdAbertura');
+  // Verifica saldo parcial quando operação E codItem já estiverem preenchidos
+  verificarSaldoSeCompleto();
+}
+
+function selecionarOpRetrabalho(cod) {
+  document.querySelectorAll('#opGridRetrabalho .op-btn').forEach(b=>b.classList.remove('selected'));
+  document.getElementById('opGridRetrabalho-'+cod).classList.add('selected');
+  state.opRetrabalho = cod;
+}
+
+function selecionarRetrabalho(tipo) {
+  document.querySelectorAll('[id^="rt-"]').forEach(b=>b.className='tipo-btn');
+  document.getElementById('rt-'+tipo).classList.add('sel-red');
+  state.retrabalho = tipo;
+  esconder('blocoRNC'); esconder('blocoOpRetrabalho');
+  if (tipo==='RNC') mostrar('blocoRNC'); else mostrar('blocoOpRetrabalho');
+}
+
+function selecionarParada(el, tipo) {
+  document.querySelectorAll('#paradaGrid .parada-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  state.parada = tipo;
+  if (tipo==='Set-up') mostrar('blocoSetup'); else esconder('blocoSetup');
+}
+
+function selecionarSetup(el, tipo) {
+  document.querySelectorAll('#blocoSetup .parada-btn').forEach(b=>b.classList.remove('selected'));
+  el.classList.add('selected');
+  state.setup = tipo;
+}
+
+// ===================== LOTE =====================
+function renderLoteSeriesGrid() {
+  const grid = document.getElementById('loteSeriesGrid');
+  if (!grid) return;
+  // Usa data-idx em vez de onclick inline — evita quebra por aspas nos nomes (ex: HAULER 10")
+  grid.innerHTML = state.series.map((s, i) => {
+    const sel = state.loteSeries.some(x => x.nrSerie === s.nrSerie);
+    return `<button class="lote-serie-chip${sel?' selected':''}" data-idx="${i}">
+      <span class="chip-nr">${s.nrSerie}</span>
+      <span class="chip-info">${s.implemento}</span>
+    </button>`;
+  }).join('');
+  const cnt = document.getElementById('loteSelCount');
+  if (cnt) cnt.textContent = state.loteSeries.length > 0
+    ? state.loteSeries.length+' série(s) selecionada(s)'
+    : 'Nenhuma série selecionada';
+}
+function toggleLoteSerie(nrSerie, implemento, cliente) {
+  const idx = state.loteSeries.findIndex(x => x.nrSerie === nrSerie);
+  if (idx >= 0) state.loteSeries.splice(idx,1);
+  else state.loteSeries.push({nrSerie, implemento, cliente});
+  renderLoteSeriesGrid();
+}
+
+// ===================== SALDO PARCIAL =====================
+
+// Chamada quando o operador digita o codItem — reavalia se já há operação selecionada
+function onCodItemInput() {
+  verificarSaldoSeCompleto();
+}
+
+// Verifica saldo apenas quando TODOS os critérios estiverem preenchidos:
+// tipo=ABERTURA + série única (não lote) + operação selecionada + codItem digitado
+function verificarSaldoSeCompleto() {
+  const codItem = (document.getElementById('codItem').value || '').trim();
+  if (state.tipo === 'ABERTURA' && state.nrSerie && !state.modoLote && state.operacao && codItem) {
+    verificarSaldoAPI(state.nrSerie, codItem, state.operacao);
+  } else {
+    esconder('alertaSaldoParcial');
+    liberarQtdPlanejada();
+  }
+}
+
+async function verificarSaldoAPI(nrSerie, codItem, operacao) {
+  try {
+    const url  = API+'?action=verificarSaldo'
+      +'&nrSerie='  +encodeURIComponent(nrSerie)
+      +'&codItem='  +encodeURIComponent(codItem)
+      +'&operacao=' +encodeURIComponent(operacao);
+    const data = await (await fetch(url)).json();
+    if (data.temSaldo && data.qtdRestante > 0) {
+      document.getElementById('alertaSaldoInfo').innerHTML =
+        'Havia <strong>'+data.qtdRestante+' itens restantes</strong> de uma baixa parcial anterior'+
+        (data.ultimaAtualizacao ? ' ('+formatarCarimbo(data.ultimaAtualizacao)+')' : '')+
+        '.<br>Quantidade planejada bloqueada para garantir o controle correto.';
+      mostrar('alertaSaldoParcial');
+      mostrar('campoQtdAbertura');
+      const qtdEl = document.getElementById('qtdPlanejada');
+      if (qtdEl) {
+        qtdEl.value             = data.qtdRestante;
+        qtdEl.readOnly          = true;
+        qtdEl.style.opacity     = '0.6';
+        qtdEl.style.cursor      = 'not-allowed';
+        qtdEl.title             = 'Quantidade bloqueada — saldo de baixa parcial anterior';
+      }
+    } else {
+      esconder('alertaSaldoParcial');
+      liberarQtdPlanejada();
+    }
+  } catch { esconder('alertaSaldoParcial'); }
+}
+
+// Libera o campo qtdPlanejada (usado ao limpar ou quando não há saldo)
+function liberarQtdPlanejada() {
+  const qtdEl = document.getElementById('qtdPlanejada');
+  if (!qtdEl) return;
+  qtdEl.readOnly = false;
+  qtdEl.style.opacity = '';
+  qtdEl.style.cursor  = '';
+  qtdEl.title = '';
+}
+
+// ===================== ENVIO =====================
+async function enviarApontamento() {
+  if (!validarFormulario()) return;
+  const btn=document.getElementById('btnEnviar');
+  btn.disabled=true; btn.textContent='Registrando...';
+  setLoading(true);
+
+  const ts   = carimboBrowser();
+  const hora = pad(new Date().getHours())+':'+pad(new Date().getMinutes());
+
+  let payload;
+
+  if (state.tipo==='FECHAMENTO' && state.abertoInfo && state.modoFechamentoRapido===false && document.getElementById('blocoFechamentoInteligente').classList.contains('visible') ||
+      state.modoFechamentoRapido) {
+    // FECHAMENTO INTELIGENTE: usa dados da abertura
+    const info = state.abertoInfo;
+    const qtdEl = document.getElementById('fechQuantidade');
+    const qtdVal = qtdEl ? qtdEl.value : '';
+    payload = {
+      timestamp: ts, hora,
+      operador: state.operador, operadorNome: state.operadorNome,
+      nrSerie: info.nrSerie || state.nrSerie,
+      implemento: info.implemento || state.implemento,
+      cliente: info.cliente || state.cliente,
+      tipoApontamento: 'FECHAMENTO',
+      operacao: (info.operacao||'').substring(0,4),
+      codItem: info.codItem || '',
+      quantidade: qtdVal===''?null:Number(qtdVal),
+      qtdPlanejada: info.qtdPlanejada || '',
+      obs1: document.getElementById('fechObs').value || '',
+      setup:'', obs2:'', retrabalho:'', numRNC:'', opRetrabalho:'', parada:'',
+      lote: state.loteSeries.length > 0 ? state.loteSeries.map(s=>s.nrSerie).join(', ') : '',
+      loteSeries: state.modoLote && state.loteSeries.length > 0 ? state.loteSeries : null,
+      // ID da abertura correspondente — backend usa para localizar a linha exata na aba Abertos
+      abertoId: (info && info.abertoId) || '',
+    };
+  } else {
+    // FLUXO NORMAL
+    const qtdPl = document.getElementById('qtdPlanejada') ? document.getElementById('qtdPlanejada').value : '';
+    payload = {
+      timestamp: ts, hora,
+      operador: state.operador, operadorNome: state.operadorNome,
+      nrSerie: state.nrSerie, implemento: state.implemento, cliente: state.cliente,
+      tipoApontamento: state.tipo,
+      operacao: state.operacao, opRetrabalho: state.opRetrabalho,
+      codItem: document.getElementById('codItem').value || '',
+      quantidade: null,
+      qtdPlanejada: qtdPl || '',
+      obs1: document.getElementById('obs1').value || '',
+      retrabalho: state.retrabalho, numRNC: document.getElementById('numRNC').value||'',
+      parada: state.parada, setup: state.setup,
+      obs2: document.getElementById('obs2') ? document.getElementById('obs2').value||'' : '',
+      lote: state.loteSeries.length > 0 ? state.loteSeries.map(s=>s.nrSerie).join(', ') : '',
+      loteSeries: state.modoLote && state.loteSeries.length > 0 ? state.loteSeries : null,
+      abertoId: (state.abertoInfo && state.abertoInfo.abertoId) || '',
+    };
+  }
+
+  try {
+    const data = await postAPI(payload);
+    if (data.success) {
+      mostrarSucesso(payload);
+    } else if (data.bloqueado) {
+      // Servidor bloqueou: atualiza o alerta com os dados do aberto
+      state.abertoInfo = data.aberto;
+      document.getElementById('alertaAbertoInfo').innerHTML =
+        '<strong>Série:</strong> '+(data.aberto.nrSerie||'—')+' | '+(data.aberto.implemento||'')+'<br>'+
+        '<strong>Operação:</strong> '+(data.aberto.operacao||'—')+'<br>'+
+        '<strong>Código:</strong> '+(data.aberto.codItem||'—')+'<br>'+
+        '<strong>Aberto em:</strong> '+(data.aberto.carimbo||'—')+
+        (data.aberto.qtdPlanejada?'<br><strong>Qtd planejada:</strong> '+data.aberto.qtdPlanejada:'');
+      document.getElementById('alertaAberto').classList.add('visible');
+      showToast('Apontamento em aberto — feche antes de abrir novo','error');
+      btn.disabled=false; btn.textContent='Registrar apontamento';
+      // Volta para step1 para mostrar o alerta
+      voltarStep1();
+    } else {
+      showToast('Erro: '+data.message,'error');
+      btn.disabled=false; btn.textContent='Registrar apontamento';
+    }
+  } catch {
+    salvarOffline(payload); mostrarSucesso(payload,true);
+  } finally { setLoading(false); }
+}
+
+function validarFormulario() {
+  if (!state.tipo) { showToast('Selecione o tipo de apontamento','error'); return false; }
+
+  // Lote: requer ao menos uma série selecionada
+  if (state.modoLote && state.tipo === 'ABERTURA' && state.loteSeries.length === 0) {
+    showToast('Selecione ao menos um Nº de série no lote','error'); return false;
+  }
+
+  const ehFechamentoInteligente = state.tipo==='FECHAMENTO' && state.abertoInfo &&
+    document.getElementById('blocoFechamentoInteligente').classList.contains('visible');
+
+  if (ehFechamentoInteligente || state.modoFechamentoRapido) {
+    const info = state.abertoInfo;
+    const codOp = (info.operacao||'').substring(0,4);
+    if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) {
+      const qtd = document.getElementById('fechQuantidade').value;
+      // Permite explicitamente 0 (fechar sem produzir nenhuma peça — saldo = total planejado)
+      if (qtd === '' || qtd === null || qtd === undefined) {
+        showToast('Informe a quantidade realizada (0 se nenhuma peça foi concluída)','error'); return false;
+      }
+      if (Number(qtd) < 0) { showToast('Quantidade não pode ser negativa','error'); return false; }
+    }
+    return true;
+  }
+
+  if (state.tipo==='ABERTURA') {
+    if (!state.operacao) { showToast('Selecione a operação','error'); return false; }
+    if (!document.getElementById('codItem').value) { showToast('Informe o código do item','error'); return false; }
+    if (OPS_REQUEREM_QTD.includes(state.operacao)) {
+      const qtd = document.getElementById('qtdPlanejada').value;
+      if (!qtd || Number(qtd) <= 0) { showToast('Informe a quantidade planejada','error'); return false; }
+    }
+  }
+  if (state.tipo==='FECHAMENTO' && !state.abertoInfo) {
+    if (!state.operacao) { showToast('Selecione a operação','error'); return false; }
+    if (!document.getElementById('codItem').value) { showToast('Informe o código do item','error'); return false; }
+  }
+  if (state.tipo.includes('PARADA') && !state.parada) { showToast('Selecione o tipo de parada','error'); return false; }
+  if (state.tipo.includes('RETRABALHO') && !state.retrabalho) { showToast('Selecione o tipo de retrabalho','error'); return false; }
+  if (state.retrabalho==='RNC' && !document.getElementById('numRNC').value) { showToast('Informe o Nº da RNC','error'); return false; }
+  return true;
+}
+
+function mostrarSucesso(payload, offline=false) {
+  document.getElementById('formContent').style.display='none';
+  document.getElementById('successScreen').classList.add('visible');
+  const tipos={ABERTURA:'Abertura registrada',FECHAMENTO:'Fechamento registrado',
+    INICIO_PARADA:'Início de parada',TERMINO_PARADA:'Término de parada',
+    INICIO_RETRABALHO:'Início de retrabalho',TERMINO_RETRABALHO:'Término de retrabalho'};
+  const nome = state.operadorNome.includes('—')
+    ? state.operadorNome.split('—')[1].trim()
+    : state.operadorNome;
+  document.getElementById('successMsg').innerHTML =
+    `<strong>${tipos[payload.tipoApontamento]||payload.tipoApontamento}</strong><br>`+
+    `${payload.hora} · ${nome}`+
+    (payload.quantidade!=null?`<br>Qtd realizada: <strong>${payload.quantidade}</strong>`+
+      (payload.qtdPlanejada?` / ${payload.qtdPlanejada} planejados`:''):'') +
+    (offline?'<br><small style="color:var(--amber)">Salvo localmente — sincroniza ao conectar</small>':'');
+}
+
+function novoApontamento() {
+  document.getElementById('formContent').style.display='block';
+  document.getElementById('successScreen').classList.remove('visible');
+  document.getElementById('btnEnviar').disabled=false;
+  document.getElementById('btnEnviar').textContent='Registrar apontamento';
+  document.getElementById('operador').value='';
+  document.getElementById('implemento').value='';
+  document.getElementById('alertaAberto').classList.remove('visible');
+  state.abertoInfo=null; state.modoFechamentoRapido=false;
+  limparStep2(); voltarStep1();
+  Object.assign(state,{operador:'',operadorNome:'',nrSerie:'',implemento:'',cliente:'',
+    tipo:'',operacao:'',opRetrabalho:'',retrabalho:'',numRNC:'',parada:'',setup:'',
+    lote:[],loteSeries:[],modoLote:false});
+}
+
+function limparStep2() {
+  state.tipo='';state.operacao='';state.parada='';state.retrabalho='';state.lote=[];state.loteSeries=[];
+  liberarQtdPlanejada(); // remove readonly caso tenha sido bloqueado por saldo parcial
+  document.querySelectorAll('.tipo-btn').forEach(b=>{if(!b.disabled)b.className='tipo-btn';});
+  document.querySelectorAll('.op-btn,.parada-btn').forEach(b=>b.classList.remove('selected'));
+  ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote',
+   'blocoRNC','blocoOpRetrabalho','blocoSetup','campoQtdAbertura','blocoQtdFechamento','alertaSaldoParcial'].forEach(esconder);
+  ['codItem','obs1','numRNC','obs2','qtdPlanejada','fechQuantidade','fechObs'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
+  document.getElementById('saldoBox').classList.remove('visible');
+}
+
+// ===================== OFFLINE =====================
+// Chave para rastrear tentativas de sincronização por item
+const FILA_MAX_TENTATIVAS = 5;
+
+function salvarOffline(p){
+  const f=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
+  // Adiciona contador de tentativas para evitar loop infinito
+  f.push({...p, _tentativas: 0});
+  localStorage.setItem('agricef_fila',JSON.stringify(f));
+}
+async function sincronizarFila(){
+  const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
+  if(!fila.length) return;
+  const nova=[];
+  for(const item of fila){
+    const tentativas = (item._tentativas || 0) + 1;
+    if (tentativas > FILA_MAX_TENTATIVAS) {
+      // Desiste após N tentativas — não enfileira de volta
+      console.warn('AGRICEF: item da fila offline descartado após '+FILA_MAX_TENTATIVAS+' tentativas', item);
+      continue;
+    }
+    try{
+      const itemSemMeta = {...item}; delete itemSemMeta._tentativas;
+      const d=await postAPI(itemSemMeta);
+      if(!d.success) nova.push({...item, _tentativas: tentativas});
+    } catch{ nova.push({...item, _tentativas: tentativas}); }
+  }
+  localStorage.setItem('agricef_fila',JSON.stringify(nova));
+  if(nova.length<fila.length) showToast((fila.length-nova.length)+' apontamento(s) sincronizado(s)','success');
+}
+
+// ===================== API =====================
+async function postAPI(obj) {
+  const params = new URLSearchParams({payload: JSON.stringify(obj)});
+  const res = await fetch(API+'?'+params.toString());
+  return res.json();
+}
+
+// ===================== ADMIN =====================
+let pinBuffer='';
+function abrirAdmin(){
+  document.getElementById('formContent').style.display='none';
+  document.getElementById('successScreen').classList.remove('visible');
+  document.getElementById('pageAdmin').style.display='block';
+  document.getElementById('adminLock').style.display='block';
+  document.getElementById('adminContent').style.display='none';
+  pinBuffer=''; atualizarPinDisplay();
+}
+function fecharAdmin(){
+  document.getElementById('pageAdmin').style.display='none';
+  document.getElementById('formContent').style.display='block';
+  pinBuffer=''; atualizarPinDisplay();
+}
+function pinKey(k){if(pinBuffer.length>=4)return;pinBuffer+=k;atualizarPinDisplay();}
+function pinDel(){pinBuffer=pinBuffer.slice(0,-1);atualizarPinDisplay();}
+function atualizarPinDisplay(){document.getElementById('pinDisplay').textContent='●'.repeat(pinBuffer.length)+'_'.repeat(4-pinBuffer.length);}
+function pinOk(){
+  if(pinBuffer===PIN_ADMIN){
+    document.getElementById('adminLock').style.display='none';
+    document.getElementById('adminContent').style.display='block';
+    renderListaAdmin();
+  } else { showToast('PIN incorreto','error'); pinBuffer=''; atualizarPinDisplay(); }
+}
+function switchTab(tab){
+  document.querySelectorAll('.admin-tab').forEach((b,i)=>b.classList.toggle('active',(i===0&&tab==='operadores')||(i===1&&tab==='series')));
+  document.getElementById('tabOperadores').style.display=tab==='operadores'?'block':'none';
+  document.getElementById('tabSeries').style.display=tab==='series'?'block':'none';
+}
+function renderListaAdmin(){
+  document.getElementById('listaOperadores').innerHTML=state.operadores.length
+    ?state.operadores.map(op=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${op.codigo}</div><div class="cadastro-item-name">${op.nome}</div></div><button class="btn-danger" onclick="removerOperador('${op.codigo}')">Remover</button></div>`).join('')
+    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhum operador.</div>';
+  document.getElementById('listaSeries').innerHTML=state.series.length
+    ?state.series.map(s=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${s.nrSerie} — ${s.cliente}</div><div class="cadastro-item-name">${s.implemento}</div></div><button class="btn-danger" onclick="removerSerie('${s.nrSerie}')">Remover</button></div>`).join('')
+    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma série.</div>';
+}
+async function adicionarOperador(){
+  const cod=document.getElementById('newOpCodigo').value.trim().toUpperCase();
+  const nome=document.getElementById('newOpNome').value.trim().toUpperCase();
+  if(!cod||!nome){showToast('Preencha código e nome','error');return;}
+  setLoading(true);
+  try{const d=await postAPI({action:'salvarOperador',codigo:cod,nome});
+    if(d.success){const e=state.operadores.find(o=>o.codigo===cod);if(e)e.nome=nome;else state.operadores.push({codigo:cod,nome});popularSelectOperador();renderListaAdmin();document.getElementById('newOpCodigo').value='';document.getElementById('newOpNome').value='';showToast('Operador adicionado','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao salvar','error');}finally{setLoading(false);}
+}
+async function removerOperador(codigo){
+  if(!confirm('Remover operador '+codigo+'?'))return;
+  setLoading(true);
+  try{const d=await postAPI({action:'removerOperador',codigo});
+    if(d.success){state.operadores=state.operadores.filter(o=>o.codigo!==codigo);popularSelectOperador();renderListaAdmin();showToast('Operador removido','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao remover','error');}finally{setLoading(false);}
+}
+async function adicionarSerie(){
+  const nr=document.getElementById('newSerNr').value.trim().toUpperCase();
+  const impl=document.getElementById('newSerImpl').value.trim().toUpperCase();
+  const cli=document.getElementById('newSerCli').value.trim().toUpperCase();
+  if(!nr||!impl||!cli){showToast('Preencha todos os campos','error');return;}
+  setLoading(true);
+  try{const d=await postAPI({action:'salvarSerie',nrSerie:nr,implemento:impl,cliente:cli});
+    if(d.success){const e=state.series.find(s=>s.nrSerie===nr);if(e){e.implemento=impl;e.cliente=cli;}else state.series.push({nrSerie:nr,implemento:impl,cliente:cli});popularSelectImplemento();renderListaAdmin();['newSerNr','newSerImpl','newSerCli'].forEach(id=>document.getElementById(id).value='');showToast('Série adicionada','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao salvar','error');}finally{setLoading(false);}
+}
+async function removerSerie(nrSerie){
+  if(!confirm('Remover série '+nrSerie+'?'))return;
+  setLoading(true);
+  try{const d=await postAPI({action:'removerSerie',nrSerie});
+    if(d.success){state.series=state.series.filter(s=>s.nrSerie!==nrSerie);popularSelectImplemento();renderListaAdmin();showToast('Série removida','success');}
+    else showToast(d.message,'error');}
+  catch{showToast('Erro ao remover','error');}finally{setLoading(false);}
+}
+
+// ===================== HELPERS =====================
+function mostrar(id){const el=document.getElementById(id);if(el){el.classList.remove('section-block');el.classList.add('visible');}}
+function esconder(id){const el=document.getElementById(id);if(el){el.classList.add('section-block');el.classList.remove('visible');}}
+function atualizarSteps(s){
+  const labels=['','Identificação','Tipo','Detalhes'];
+  for(let i=1;i<=3;i++){const d=document.getElementById('dot'+i);d.classList.remove('active','done');if(i<s)d.classList.add('done');else if(i===s)d.classList.add('active');}
+  document.getElementById('stepLabel').textContent=labels[s]||'';
+}
+function setLoading(v){document.getElementById('loadingOverlay').classList.toggle('visible',v);}
+let toastTimer;
+function showToast(msg,type=''){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.className='toast '+type+' show';
+  // Erros ficam visíveis por mais tempo para o operador conseguir ler
+  const dur = type==='error' ? 5000 : 2800;
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),dur);
+}
+
+window.addEventListener('online',sincronizarFila);
+init();
+</script>
+</body>
+</html>

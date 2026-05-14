@@ -1,0 +1,77 @@
+name: 🚀 Deploy AGRICEF
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Deploy do Apps Script via clasp
+  # Roda quando agricef-appsscript.gs muda
+  # ─────────────────────────────────────────────
+  deploy-apps-script:
+    name: Deploy Apps Script
+    runs-on: ubuntu-latest
+    if: |
+      contains(toJson(github.event.commits.*.modified), 'agricef-appsscript.gs') ||
+      contains(toJson(github.event.commits.*.added), 'agricef-appsscript.gs')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar clasp
+        run: npm install -g @google/clasp
+
+      - name: Configurar credenciais clasp
+        run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+
+      - name: Push para Apps Script
+        run: clasp push --force
+
+      - name: Criar nova versão de implantação
+        run: |
+          clasp deploy \
+            --deploymentId "${{ secrets.CLASP_DEPLOYMENT_ID }}" \
+            --description "Deploy automático $(date +'%d/%m/%Y %H:%M')"
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Publicar HTML no GitHub Pages
+  # Roda quando index.html muda
+  # ─────────────────────────────────────────────
+  deploy-pages:
+    name: Deploy GitHub Pages
+    runs-on: ubuntu-latest
+    if: |
+      contains(toJson(github.event.commits.*.modified), 'index.html') ||
+      contains(toJson(github.event.commits.*.added), 'index.html')
+
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artefato Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy para GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

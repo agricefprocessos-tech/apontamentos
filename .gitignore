@@ -1,0 +1,10 @@
+# Credenciais clasp (NUNCA commitar)
+.clasprc.json
+
+# Claude
+.claude/
+
+# Sistema
+CONTEXTO.md
+*.tmp
+*.log
