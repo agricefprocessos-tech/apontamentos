@@ -1,5 +1,5 @@
 // ================================================================
-// AGRICEF — Web App Apps Script v4.1
+// AGRICEF — Web App Apps Script v4.1 (deploy 14/05/2026)
 //
 // Colunas da planilha (inalteradas):
 //   A  Carimbo de data/hora
