@@ -27,7 +27,8 @@ jobs:
 
       - name: Configurar credenciais clasp
         # CLASPRC_JSON = conteúdo do arquivo ~/.clasprc.json após "clasp login"
-        run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+        # Usa printf para evitar BOM/newline extras; sed remove BOM UTF-8 se presente
+        run: printf '%s' '${{ secrets.CLASPRC_JSON }}' | sed 's/^\xEF\xBB\xBF//' > ~/.clasprc.json
 
       - name: Verificar arquivos a enviar
         run: |
