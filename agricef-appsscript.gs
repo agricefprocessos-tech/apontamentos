@@ -305,31 +305,30 @@ function gravarApontamento(payload) {
       const qtdPl = Number(payload.qtdPlanejada || 0);
       const qtdRe = (payload.quantidade === '' || payload.quantidade === null || payload.quantidade === undefined)
         ? 0 : Number(payload.quantidade);
-      if (qtdPl > 0) {
-        const saldo      = Math.max(0, qtdPl - qtdRe);
-        const abaSaldo   = garantirAbaSaldo(ss);
-        const opCod      = String(payload.operacao || '').substring(0, 4);
-        const codItemKey = String(payload.codItem || '').trim();
 
-        if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
-          // LOTE: salva saldo para cada série individualmente
-          // Cada série recebe o mesmo saldo (qtdPlanejada era igual para todas)
-          for (const item of loteSeriesFechamento) {
-            atualizarSaldoParcial(
-              abaSaldo,
-              String(item.nrSerie || '').trim(),
-              codItemKey,
-              opCod,
-              saldo,
-              carimbo
-            );
-          }
-        } else {
-          // Série única
-          const nrSerieKey = String(payload.nrSerie || '').trim();
-          if (nrSerieKey) {
-            atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, saldo, carimbo);
-          }
+      // Atualiza saldo sempre que houver série — a função cuida de saldo acumulado vs. primeiro ciclo
+      const abaSaldo   = garantirAbaSaldo(ss);
+      const opCod      = String(payload.operacao || '').substring(0, 4);
+      const codItemKey = String(payload.codItem || '').trim();
+
+      if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
+        // LOTE: atualiza saldo de cada série individualmente
+        for (const item of loteSeriesFechamento) {
+          atualizarSaldoParcial(
+            abaSaldo,
+            String(item.nrSerie || '').trim(),
+            codItemKey,
+            opCod,
+            qtdPl,
+            qtdRe,
+            carimbo
+          );
+        }
+      } else {
+        // Série única
+        const nrSerieKey = String(payload.nrSerie || '').trim();
+        if (nrSerieKey) {
+          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo);
         }
       }
     }
@@ -609,11 +608,17 @@ function garantirAbaSaldo(ss) {
   return aba;
 }
 
-function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdRestante, carimbo) {
+// qtdPlanejada: planejado do ciclo atual (usado só se não houver saldo anterior)
+// qtdRealizada: produzido neste ciclo (sempre subtraído do saldo existente ou do planejado)
+// Regra de acumulação:
+//   • Há saldo anterior  → novoSaldo = saldoAnterior - qtdRealizada
+//   • Sem saldo anterior → novoSaldo = qtdPlanejada  - qtdRealizada  (primeiro ciclo)
+//   • novoSaldo ≤ 0      → remove o registro (produção concluída)
+function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo) {
   const dados = aba.getDataRange().getValues();
   const codItemNorm = String(codItem || '').trim();
-  // Chave composta: NrSerie + CodItem + Operacao
-  // Coleta TODOS os índices que batem (pode haver duplicatas de testes)
+
+  // Coleta todos os índices que batem na chave composta
   const matches = [];
   for (let i = 1; i < dados.length; i++) {
     if (
@@ -625,26 +630,36 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdRestante, car
     }
   }
 
-  if (matches.length === 0) {
-    // Nenhum registro — cria novo se há saldo
-    if (qtdRestante > 0) {
-      aba.appendRow([nrSerie, codItem, operacao, qtdRestante, carimbo]);
-    }
-    return;
+  // Calcula o novo saldo
+  let novoSaldo;
+  if (matches.length > 0) {
+    // Há saldo acumulado — subtrai o que foi produzido neste ciclo
+    const saldoAtual = Number(dados[matches[0]][3]) || 0;
+    novoSaldo = Math.max(0, saldoAtual - qtdRealizada);
+  } else {
+    // Primeiro ciclo — base é a qtdPlanejada
+    if (qtdPlanejada <= 0) return; // sem planejado e sem saldo → nada a fazer
+    novoSaldo = Math.max(0, qtdPlanejada - qtdRealizada);
   }
 
-  // Remove duplicatas (mantém só o primeiro match) — de baixo para cima para não deslocar índices
+  // Remove duplicatas de baixo para cima
   for (let k = matches.length - 1; k >= 1; k--) {
     aba.deleteRow(matches[k] + 1);
   }
 
-  // Atualiza ou remove o registro principal
+  if (matches.length === 0) {
+    if (novoSaldo > 0) {
+      aba.appendRow([nrSerie, codItem, operacao, novoSaldo, carimbo]);
+    }
+    return;
+  }
+
   const linha = matches[0] + 1;
-  if (qtdRestante <= 0) {
+  if (novoSaldo <= 0) {
     aba.deleteRow(linha);
   } else {
-    aba.getRange(linha, 3).setValue(operacao); // regrava como texto (evita Sheets converter para número)
-    aba.getRange(linha, 4).setValue(qtdRestante);
+    aba.getRange(linha, 3).setValue(operacao);
+    aba.getRange(linha, 4).setValue(novoSaldo);
     aba.getRange(linha, 5).setValue(carimbo);
   }
 }
