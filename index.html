@@ -109,6 +109,18 @@ label:first-child{margin-top:0}
 .lote-add-row{display:flex;gap:8px;margin-top:8px}
 .btn-add{background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius-sm);color:var(--accent);font-size:22px;font-weight:300;padding:0 16px;cursor:pointer;transition:all .2s}
 .btn-add:active{background:rgba(79,142,247,.1)}
+/* LOTE CHIPS */
+.lote-serie-chip{background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--radius-sm);color:var(--text2);font-family:'DM Sans',system-ui,sans-serif;font-size:12px;padding:9px 11px;cursor:pointer;transition:all .2s;display:inline-flex;flex-direction:column;gap:2px;text-align:left}
+.lote-serie-chip .chip-nr{font-family:'DM Mono',monospace;font-size:11px;color:var(--text);font-weight:600}
+.lote-serie-chip .chip-info{font-size:11px;color:var(--text2)}
+.lote-serie-chip.selected{border-color:var(--green);background:rgba(46,204,113,.12)}
+.lote-serie-chip.selected .chip-nr{color:var(--green)}
+.lote-serie-chip:active{transform:scale(.97)}
+/* SALDO PARCIAL */
+.alert-saldo{background:rgba(243,156,18,.08);border:1.5px solid var(--amber);border-radius:var(--radius-sm);padding:12px 14px;margin-top:10px;display:none}
+.alert-saldo.visible{display:block}
+.alert-saldo-title{font-size:13px;font-weight:700;color:var(--amber);margin-bottom:4px}
+.alert-saldo-info{font-size:12px;color:#c87d3a;line-height:1.6}
 
 /* BUTTONS */
 .btn-submit{width:100%;background:var(--accent);color:#fff;font-family:'DM Sans',system-ui,sans-serif;font-size:16px;font-weight:700;border:none;border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s;margin-top:8px;letter-spacing:.02em}
@@ -272,6 +284,12 @@ label:first-child{margin-top:0}
       <input type="text" id="obs1" placeholder="Opcional">
     </div>
 
+    <!-- ALERTA SALDO PARCIAL -->
+    <div class="alert-saldo section-block" id="alertaSaldoParcial">
+      <div class="alert-saldo-title">📋 Baixa parcial anterior</div>
+      <div class="alert-saldo-info" id="alertaSaldoInfo"></div>
+    </div>
+
     <!-- BLOCO RETRABALHO -->
     <div class="card section-block" id="blocoRetrabalho">
       <div class="section-title">Tipo de retrabalho</div>
@@ -311,12 +329,9 @@ label:first-child{margin-top:0}
     <!-- BLOCO LOTE -->
     <div class="card section-block" id="blocoLote">
       <div class="section-title">Apontamento em lote</div>
-      <div class="info-box">Adicione os Nº de série produzidos. Um registro será criado para cada item.</div>
-      <div id="loteItens" style="margin-top:10px"></div>
-      <div class="lote-add-row">
-        <input type="text" id="loteInput" placeholder="Nº de série">
-        <button class="btn-add" onclick="adicionarLote()">+</button>
-      </div>
+      <div class="info-box">Toque nas séries produzidas. Um registro será criado para cada uma.</div>
+      <div id="loteSeriesGrid" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
+      <div id="loteSelCount" style="margin-top:8px;font-size:12px;color:var(--green);font-weight:600;text-align:center"></div>
     </div>
 
     <button class="btn-submit" onclick="enviarApontamento()" id="btnEnviar">Registrar apontamento</button>
@@ -410,8 +425,8 @@ const OPS_REQUEREM_QTD = ['0010','0020','0030','0040','0050','0060','0080'];
 const state = {
   operador:'', operadorNome:'', nrSerie:'', implemento:'', cliente:'',
   tipo:'', operacao:'', opRetrabalho:'', retrabalho:'', numRNC:'',
-  parada:'', setup:'', lote:[], abertoInfo:null,
-  modoFechamentoRapido: false,
+  parada:'', setup:'', lote:[], loteSeries:[], abertoInfo:null,
+  modoFechamentoRapido: false, modoLote: false,
   operadores:[], series:[],
 };
 
@@ -449,6 +464,20 @@ function iniciarRelogio() {
 }
 
 const pad = n => String(n).padStart(2,'0');
+
+function formatarCarimbo(carimbo) {
+  if (!carimbo) return '—';
+  const s = String(carimbo);
+  if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) return s; // já em pt-BR
+  try {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) {
+      return pad(d.getDate())+'/'+pad(d.getMonth()+1)+'/'+d.getFullYear()+
+        ' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    }
+  } catch {}
+  return s;
+}
 
 function carimboBrowser() {
   const n = new Date();
@@ -489,6 +518,10 @@ function popularSelectOperador() {
 function popularSelectImplemento() {
   const sel = document.getElementById('implemento');
   sel.innerHTML = '<option value="">Selecione o implemento...</option>';
+  const loteOpt = document.createElement('option');
+  loteOpt.value = '__LOTE__';
+  loteOpt.textContent = '🔢 APONTAMENTO EM LOTE';
+  sel.appendChild(loteOpt);
   state.series.forEach(s => {
     const o = document.createElement('option');
     o.value = JSON.stringify({nrSerie:s.nrSerie, implemento:s.implemento, cliente:s.cliente});
@@ -531,8 +564,8 @@ function onOperadorChange() {
 }
 
 function onImplementoChange() {
-  // Não re-verifica ao mudar série — regra é por operador
-  // mas atualiza botões caso abertoInfo já exista
+  const val = document.getElementById('implemento').value;
+  state.modoLote = (val === '__LOTE__');
   atualizarBotoesTipo();
 }
 
@@ -550,17 +583,8 @@ async function verificarAbertoSeCompleto() {
     const data = await res.json();
 
     if (data.aberto) {
-      // Valida carimbo — descarta registros antigos com ISO
-      if (data.carimbo && (data.carimbo.includes('T') || data.carimbo.includes('1899'))) {
-        state.abertoInfo = null;
-        document.getElementById('alertaAberto').classList.remove('visible');
-        setLoading(false);
-        return;
-      }
-
       state.abertoInfo = data;
 
-      // Monta exibição — detecta "APONTAMENTO EM LOTE" no nrSerie
       const ehLote = (data.nrSerie||'').toUpperCase().includes('LOTE') ||
                      (data.implemento||'').toUpperCase().includes('LOTE');
       const serieLabel = ehLote
@@ -571,7 +595,7 @@ async function verificarAbertoSeCompleto() {
         '<strong>Série:</strong> '+serieLabel+'<br>'+
         '<strong>Operação:</strong> '+data.operacao+'<br>'+
         '<strong>Código:</strong> '+(data.codItem||'—')+'<br>'+
-        '<strong>Aberto em:</strong> '+data.carimbo+
+        '<strong>Aberto em:</strong> '+formatarCarimbo(data.carimbo)+
         (data.qtdPlanejada ? '<br><strong>Qtd planejada:</strong> '+data.qtdPlanejada : '');
       document.getElementById('alertaAberto').classList.add('visible');
     } else {
@@ -588,17 +612,24 @@ async function irStep2() {
   if (!opSel.value)  { showToast('Selecione o operador','error'); return; }
   if (!impSel.value) { showToast('Selecione o implemento','error'); return; }
 
-  state.operador    = opSel.value;
+  state.operador     = opSel.value;
   state.operadorNome = opSel.options[opSel.selectedIndex].text;
-  const imp = JSON.parse(impSel.value);
-  state.nrSerie    = imp.nrSerie;
-  state.implemento = imp.implemento;
-  state.cliente    = imp.cliente;
+
+  if (impSel.value === '__LOTE__') {
+    state.modoLote   = true;
+    state.nrSerie    = '';
+    state.implemento = 'LOTE';
+    state.cliente    = '';
+  } else {
+    state.modoLote   = false;
+    const imp        = JSON.parse(impSel.value);
+    state.nrSerie    = imp.nrSerie;
+    state.implemento = imp.implemento;
+    state.cliente    = imp.cliente;
+  }
 
   mostrar('step2'); esconder('step1');
   atualizarSteps(2);
-
-  // Se há aberto, desabilita tipos de abertura e sugere fechamento
   atualizarBotoesTipo();
 }
 
@@ -655,7 +686,7 @@ function iniciarFechamentoRapido() {
   document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
   document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
   document.getElementById('fechImplementoLabel').textContent = (info.nrSerie||'') +' | '+(info.implemento||'')+' | '+(info.cliente||'');
-  document.getElementById('fechCarimboLabel').textContent  = info.carimbo   || '—';
+  document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
   document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
 
   // Mostra campo quantidade só se operação exige
@@ -687,7 +718,11 @@ function selecionarTipo(tipo) {
 
   ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote'].forEach(esconder);
 
-  if (tipo==='ABERTURA')                mostrar('blocoProducao');
+  if (tipo==='ABERTURA') {
+    mostrar('blocoProducao');
+    esconder('alertaSaldoParcial');
+    if (state.modoLote) { mostrar('blocoLote'); renderLoteSeriesGrid(); }
+  }
   else if (tipo==='FECHAMENTO')         { mostrar('blocoFechamentoInteligente'); preencherFechamentoSeAberto(); }
   else if (tipo.includes('RETRABALHO')) mostrar('blocoRetrabalho');
   else if (tipo.includes('PARADA'))     mostrar('blocoParada');
@@ -698,23 +733,22 @@ function selecionarTipo(tipo) {
 function preencherFechamentoSeAberto() {
   const info = state.abertoInfo;
   if (!info) {
-    // Sem aberto: mostra campos normais de produção para o fechamento
     esconder('blocoFechamentoInteligente');
     mostrar('blocoProducao');
-    mostrar('blocoLote');
     return;
   }
-  // Com aberto: preenche inteligente
+  const ehLote = (info.implemento||'').toUpperCase().includes('LOTE');
   document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
   document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
-  document.getElementById('fechImplementoLabel').textContent = (info.nrSerie||'')+' | '+(info.implemento||'')+' | '+(info.cliente||'');
-  document.getElementById('fechCarimboLabel').textContent  = info.carimbo   || '—';
+  document.getElementById('fechImplementoLabel').textContent = ehLote
+    ? '🔢 Apontamento em lote'
+    : (info.nrSerie||'')+' | '+(info.implemento||'')+' | '+(info.cliente||'');
+  document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
   document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
   const codOp = (info.operacao||'').substring(0,4);
   if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
   else esconder('blocoQtdFechamento');
   mostrar('blocoFechamentoInteligente');
-  mostrar('blocoLote');
 }
 
 function calcularSaldo() {
@@ -755,10 +789,14 @@ function selecionarOperacao(cod) {
   document.querySelectorAll('#opGrid .op-btn').forEach(b=>b.classList.remove('selected'));
   document.getElementById('opGrid-'+cod).classList.add('selected');
   state.operacao = cod;
-
-  // Regra de quantidade por operação
   if (OPS_REQUEREM_QTD.includes(cod)) mostrar('campoQtdAbertura');
   else esconder('campoQtdAbertura');
+  // Verificar saldo parcial para esta série + operação
+  if (state.tipo === 'ABERTURA' && state.nrSerie && !state.modoLote) {
+    verificarSaldoAPI(state.nrSerie, cod);
+  } else {
+    esconder('alertaSaldoParcial');
+  }
 }
 
 function selecionarOpRetrabalho(cod) {
@@ -789,16 +827,47 @@ function selecionarSetup(tipo) {
 }
 
 // ===================== LOTE =====================
-function adicionarLote() {
-  const inp=document.getElementById('loteInput'), val=inp.value.trim();
-  if (!val) return;
-  if (state.lote.includes(val)){showToast('Nº série já adicionado','error');return;}
-  state.lote.push(val); inp.value=''; renderLote();
+function renderLoteSeriesGrid() {
+  const grid = document.getElementById('loteSeriesGrid');
+  if (!grid) return;
+  grid.innerHTML = state.series.map(s => {
+    const sel = state.loteSeries.some(x => x.nrSerie === s.nrSerie);
+    const nr  = s.nrSerie.replace(/'/g,"\\'");
+    const im  = s.implemento.replace(/'/g,"\\'");
+    const cl  = s.cliente.replace(/'/g,"\\'");
+    return `<button class="lote-serie-chip${sel?' selected':''}" onclick="toggleLoteSerie('${nr}','${im}','${cl}')" id="lote-chip-${s.nrSerie}">
+      <span class="chip-nr">${s.nrSerie}</span>
+      <span class="chip-info">${s.implemento}</span>
+    </button>`;
+  }).join('');
+  const cnt = document.getElementById('loteSelCount');
+  if (cnt) cnt.textContent = state.loteSeries.length > 0
+    ? state.loteSeries.length+' série(s) selecionada(s)'
+    : 'Nenhuma série selecionada';
 }
-function removerLote(i){state.lote.splice(i,1);renderLote();}
-function renderLote(){
-  document.getElementById('loteItens').innerHTML=state.lote.map((s,i)=>
-    `<div class="lote-item"><span>${s}</span><button class="lote-remove" onclick="removerLote(${i})">×</button></div>`).join('');
+function toggleLoteSerie(nrSerie, implemento, cliente) {
+  const idx = state.loteSeries.findIndex(x => x.nrSerie === nrSerie);
+  if (idx >= 0) state.loteSeries.splice(idx,1);
+  else state.loteSeries.push({nrSerie, implemento, cliente});
+  renderLoteSeriesGrid();
+}
+
+// ===================== SALDO PARCIAL =====================
+async function verificarSaldoAPI(nrSerie, operacao) {
+  try {
+    const url  = API+'?action=verificarSaldo&nrSerie='+encodeURIComponent(nrSerie)+'&operacao='+encodeURIComponent(operacao);
+    const data = await (await fetch(url)).json();
+    const box  = document.getElementById('alertaSaldoParcial');
+    const info = document.getElementById('alertaSaldoInfo');
+    if (data.temSaldo && data.qtdRestante > 0) {
+      info.innerHTML = 'Havia <strong>'+data.qtdRestante+' itens restantes</strong> de uma baixa parcial anterior ('+formatarCarimbo(data.ultimaAtualizacao)+').<br>A quantidade planejada foi preenchida automaticamente.';
+      box.classList.add('visible');
+      const qtdEl = document.getElementById('qtdPlanejada');
+      if (qtdEl && !qtdEl.value) qtdEl.value = data.qtdRestante;
+    } else {
+      box.classList.remove('visible');
+    }
+  } catch { esconder('alertaSaldoParcial'); }
 }
 
 // ===================== ENVIO =====================
@@ -832,7 +901,8 @@ async function enviarApontamento() {
       qtdPlanejada: info.qtdPlanejada || '',
       obs1: document.getElementById('fechObs').value || '',
       setup:'', obs2:'', retrabalho:'', numRNC:'', opRetrabalho:'', parada:'',
-      lote: state.lote.join(', '),
+      lote: state.loteSeries.length > 0 ? state.loteSeries.map(s=>s.nrSerie).join(', ') : '',
+      loteSeries: state.modoLote && state.loteSeries.length > 0 ? state.loteSeries : null,
     };
   } else {
     // FLUXO NORMAL
@@ -850,7 +920,8 @@ async function enviarApontamento() {
       retrabalho: state.retrabalho, numRNC: document.getElementById('numRNC').value||'',
       parada: state.parada, setup: state.setup,
       obs2: document.getElementById('obs2') ? document.getElementById('obs2').value||'' : '',
-      lote: state.lote.join(', '),
+      lote: state.loteSeries.length > 0 ? state.loteSeries.map(s=>s.nrSerie).join(', ') : '',
+      loteSeries: state.modoLote && state.loteSeries.length > 0 ? state.loteSeries : null,
     };
   }
 
@@ -883,6 +954,11 @@ async function enviarApontamento() {
 
 function validarFormulario() {
   if (!state.tipo) { showToast('Selecione o tipo de apontamento','error'); return false; }
+
+  // Lote: requer ao menos uma série selecionada
+  if (state.modoLote && state.tipo === 'ABERTURA' && state.loteSeries.length === 0) {
+    showToast('Selecione ao menos um Nº de série no lote','error'); return false;
+  }
 
   const ehFechamentoInteligente = state.tipo==='FECHAMENTO' && state.abertoInfo &&
     document.getElementById('blocoFechamentoInteligente').classList.contains('visible');
@@ -943,19 +1019,19 @@ function novoApontamento() {
   state.abertoInfo=null; state.modoFechamentoRapido=false;
   limparStep2(); voltarStep1();
   Object.assign(state,{operador:'',operadorNome:'',nrSerie:'',implemento:'',cliente:'',
-    tipo:'',operacao:'',opRetrabalho:'',retrabalho:'',numRNC:'',parada:'',setup:'',lote:[]});
+    tipo:'',operacao:'',opRetrabalho:'',retrabalho:'',numRNC:'',parada:'',setup:'',
+    lote:[],loteSeries:[],modoLote:false});
 }
 
 function limparStep2() {
-  state.tipo='';state.operacao='';state.parada='';state.retrabalho='';state.lote=[];
+  state.tipo='';state.operacao='';state.parada='';state.retrabalho='';state.lote=[];state.loteSeries=[];
   document.querySelectorAll('.tipo-btn').forEach(b=>{if(!b.disabled)b.className='tipo-btn';});
   document.querySelectorAll('.op-btn,.parada-btn').forEach(b=>b.classList.remove('selected'));
   ['blocoProducao','blocoFechamentoInteligente','blocoRetrabalho','blocoParada','blocoLote',
-   'blocoRNC','blocoOpRetrabalho','blocoSetup','campoQtdAbertura','blocoQtdFechamento'].forEach(esconder);
-  ['codItem','obs1','numRNC','obs2','qtdPlanejada','fechQuantidade','fechObs','loteInput'].forEach(id=>{
+   'blocoRNC','blocoOpRetrabalho','blocoSetup','campoQtdAbertura','blocoQtdFechamento','alertaSaldoParcial'].forEach(esconder);
+  ['codItem','obs1','numRNC','obs2','qtdPlanejada','fechQuantidade','fechObs'].forEach(id=>{
     const el=document.getElementById(id); if(el) el.value='';
   });
-  document.getElementById('loteItens').innerHTML='';
   document.getElementById('saldoBox').classList.remove('visible');
 }
 
