@@ -123,7 +123,7 @@ function verificarAberto(operador, implemento) {
           aberto:        true,
           tipo:          row[2]  || '',
           operacao:      row[3]  || '',
-          carimbo:       String(row[4]),
+          carimbo:       formatarCarimboGs(row[4]),
           codItem:       row[5]  || '',
           qtdPlanejada:  row[6]  || '',
           nrSerie:       row[7]  || '',
@@ -180,7 +180,7 @@ function gravarApontamento(payload) {
             aberto: {
               tipo:         dadosAbertos[i][2] || '',
               operacao:     dadosAbertos[i][3] || '',
-              carimbo:      String(dadosAbertos[i][4]),
+              carimbo:      formatarCarimboGs(dadosAbertos[i][4]),
               codItem:      dadosAbertos[i][5] || '',
               qtdPlanejada: dadosAbertos[i][6] || '',
               nrSerie:      dadosAbertos[i][7] || '',
@@ -549,6 +549,14 @@ function gerarIdApontamento() {
 
 // Normaliza código de operador: Sheets converte '000130' → número 130.
 // Comparar como número evita falsos negativos por zeros à esquerda.
+// Formata um valor lido da planilha como data/hora no padrão pt-BR
+// Sheets pode converter strings de data em objetos Date — String(date) retorna formato en-US
+function formatarCarimboGs(val) {
+  if (!val) return '';
+  if (val instanceof Date) return Utilities.formatDate(val, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+  return String(val);
+}
+
 function mesmoOperador(a, b) {
   if (a === null || a === undefined || b === null || b === undefined) return false;
   const sa = String(a).trim();
