@@ -594,25 +594,39 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdRestante, car
   const dados = aba.getDataRange().getValues();
   const codItemNorm = String(codItem || '').trim();
   // Chave composta: NrSerie + CodItem + Operacao
-  // mesmoOperador() trata leading-zeros (ex: '0010' ↔ 10)
+  // Coleta TODOS os índices que batem (pode haver duplicatas de testes)
+  const matches = [];
   for (let i = 1; i < dados.length; i++) {
     if (
       mesmoOperador(dados[i][0], nrSerie) &&
       String(dados[i][1] || '').trim() === codItemNorm &&
       mesmoOperador(dados[i][2], operacao)
     ) {
-      if (qtdRestante <= 0) {
-        aba.deleteRow(i + 1);
-      } else {
-        aba.getRange(i + 1, 3).setValue(operacao); // regrava como texto (evita Sheets converter para número)
-        aba.getRange(i + 1, 4).setValue(qtdRestante);
-        aba.getRange(i + 1, 5).setValue(carimbo);
-      }
-      return;
+      matches.push(i);
     }
   }
-  if (qtdRestante > 0) {
-    aba.appendRow([nrSerie, codItem, operacao, qtdRestante, carimbo]);
+
+  if (matches.length === 0) {
+    // Nenhum registro — cria novo se há saldo
+    if (qtdRestante > 0) {
+      aba.appendRow([nrSerie, codItem, operacao, qtdRestante, carimbo]);
+    }
+    return;
+  }
+
+  // Remove duplicatas (mantém só o primeiro match) — de baixo para cima para não deslocar índices
+  for (let k = matches.length - 1; k >= 1; k--) {
+    aba.deleteRow(matches[k] + 1);
+  }
+
+  // Atualiza ou remove o registro principal
+  const linha = matches[0] + 1;
+  if (qtdRestante <= 0) {
+    aba.deleteRow(linha);
+  } else {
+    aba.getRange(linha, 3).setValue(operacao); // regrava como texto (evita Sheets converter para número)
+    aba.getRange(linha, 4).setValue(qtdRestante);
+    aba.getRange(linha, 5).setValue(carimbo);
   }
 }
 
