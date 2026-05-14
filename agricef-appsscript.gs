@@ -1,5 +1,5 @@
 // ================================================================
-// AGRICEF — Web App Apps Script v4.1 (deploy 14/05/2026)
+// AGRICEF — Web App Apps Script v4.2 (deploy 14/05/2026)
 //
 // Colunas da planilha (inalteradas):
 //   A  Carimbo de data/hora
@@ -161,13 +161,15 @@ function gravarApontamento(payload) {
     const abaAb = garantirAbaAbertos(ss);
     const tipo  = payload.tipoApontamento || '';
 
+    // Lê Abertos UMA VEZ — reaproveitado em validação, loteSeriesFechamento e atualizarAbertos
+    const dadosAbertos = abaAb.getDataRange().getValues();
+
     // ---------------------------------------------------------------
     // VALIDAÇÃO SERVER-SIDE — executada ANTES de qualquer escrita,
     // dentro do lock, para bloquear dupla abertura com segurança.
     // ---------------------------------------------------------------
     const tiposAbertura = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
     if (tiposAbertura.includes(tipo)) {
-      const dadosAbertos = abaAb.getDataRange().getValues();
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue; // linha vazia
         if (mesmoOperador(dadosAbertos[i][0], payload.operador)) {
@@ -242,41 +244,43 @@ function gravarApontamento(payload) {
     ];
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
-      // Novo formato: array de {nrSerie, implemento, cliente} — cada série gera seu próprio ID
-      for (const item of payload.loteSeries) {
+      // Batch write — uma única chamada de API para todas as séries do lote
+      const rows = payload.loteSeries.map(item => {
         const linhaMod = [...linha];
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
         linhaMod[15] = gerarIdApontamento();
-        abaRe.appendRow(linhaMod);
-      }
+        return linhaMod;
+      });
+      const primeiraLinha = abaRe.getLastRow() + 1;
+      abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
     } else if (payload.lote && payload.lote.trim() !== '') {
-      // Formato legado
+      // Formato legado — batch write também
       const series = payload.lote.split(',').map(s => s.trim()).filter(Boolean);
-      for (const serie of series) {
+      const rows = series.map(serie => {
         const linhaMod = [...linha];
         linhaMod[5]  = serie + ' | ' + payload.implemento + ' | ' + payload.cliente;
         linhaMod[15] = gerarIdApontamento();
-        abaRe.appendRow(linhaMod);
-      }
+        return linhaMod;
+      });
+      const primeiraLinha = abaRe.getLastRow() + 1;
+      abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
     } else {
       abaRe.appendRow(linha);
     }
 
     // ---------------------------------------------------------------
-    // FECHAMENTO: lê LoteSeries (col 11) da aba Abertos ANTES de
-    // atualizarAbertos, que vai remover a linha do operador.
+    // FECHAMENTO: lê LoteSeries (col 11) da aba Abertos já lida acima.
     // Match preferencial por AbertoId (col 12); fallback por operador.
     // ---------------------------------------------------------------
     let loteSeriesFechamento = null;
     if (tipo === 'FECHAMENTO') {
-      const dadosAbFech    = abaAb.getDataRange().getValues();
       const abertoIdPayload = String(payload.abertoId || '').trim();
-      for (let i = 1; i < dadosAbFech.length; i++) {
-        const rowId   = String(dadosAbFech[i][12] || '').trim();
+      for (let i = 1; i < dadosAbertos.length; i++) {
+        const rowId   = String(dadosAbertos[i][12] || '').trim();
         const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
-        const matchOp = !matchId && mesmoOperador(dadosAbFech[i][0], payload.operador);
+        const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
         if (matchId || matchOp) {
-          const loteJson = String(dadosAbFech[i][11] || '');
+          const loteJson = String(dadosAbertos[i][11] || '');
           if (loteJson) {
             try { loteSeriesFechamento = JSON.parse(loteJson); } catch(e) {}
           }
@@ -285,7 +289,8 @@ function gravarApontamento(payload) {
       }
     }
 
-    atualizarAbertos(abaAb, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
+    // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
+    atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
 
     // ---------------------------------------------------------------
     // SALDO PARCIAL — salvo no FECHAMENTO
@@ -344,10 +349,11 @@ function gravarApontamento(payload) {
 // ================================================================
 
 // abertoId: ID único gerado na abertura (AP-...) — usado para identificar a linha exata no fechamento
-function atualizarAbertos(aba, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId) {
+// dadosAbertos: resultado de getDataRange().getValues() já lido pelo caller — evita releitura
+function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId) {
   const operador   = payload.operador  || '';
   const implemento = payload.nrSerie   || payload.implemento || '';
-  const dados      = aba.getDataRange().getValues();
+  const dados      = dadosAbertos;
 
   const tiposAb = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
   const tiposFe = ['FECHAMENTO', 'TERMINO_RETRABALHO', 'TERMINO_PARADA'];
@@ -404,6 +410,11 @@ function atualizarAbertos(aba, payload, tipo, tipoFormatado, op1, tipoParada, ca
 
 function getCadastros() {
   try {
+    // Cache de 5 min — evita abrir a planilha a cada carregamento de página
+    const cache  = CacheService.getScriptCache();
+    const cached = cache.get('cadastros_v2');
+    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+
     const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
     const abaOp = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
     const abaSe = garantirAbaCadastro(ss, ABA_SERIES,     ['NrSerie', 'Implemento', 'Cliente', 'Ativo']);
@@ -416,10 +427,16 @@ function getCadastros() {
       .filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
       .map(r => ({ nrSerie: String(r[0]).trim(), implemento: String(r[1]).trim(), cliente: String(r[2]).trim() }));
 
-    return jsonResponse({ success: true, operadores, series });
+    const resultado = JSON.stringify({ success: true, operadores, series });
+    cache.put('cadastros_v2', resultado, 300); // 5 minutos
+    return ContentService.createTextOutput(resultado).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
   }
+}
+
+function invalidarCacheCadastros() {
+  try { CacheService.getScriptCache().remove('cadastros_v2'); } catch(e) {}
 }
 
 function salvarOperador(payload) {
@@ -435,6 +452,7 @@ function salvarOperador(payload) {
       }
     }
     aba.appendRow([payload.codigo, payload.nome, 'Sim']);
+    invalidarCacheCadastros();
     return jsonResponse({ success: true, message: 'Operador adicionado.' });
   } catch (err) { return jsonResponse({ success: false, message: err.message }); }
 }
@@ -447,6 +465,7 @@ function removerOperador(payload) {
     for (let i = dados.length-1; i >= 1; i--) {
       if (String(dados[i][0]).trim() === String(payload.codigo).trim()) {
         aba.getRange(i+1,3).setValue('Não');
+        invalidarCacheCadastros();
         return jsonResponse({ success: true, message: 'Operador desativado.' });
       }
     }
@@ -468,6 +487,7 @@ function salvarSerie(payload) {
       }
     }
     aba.appendRow([payload.nrSerie, payload.implemento, payload.cliente, 'Sim']);
+    invalidarCacheCadastros();
     return jsonResponse({ success: true, message: 'Série adicionada.' });
   } catch (err) { return jsonResponse({ success: false, message: err.message }); }
 }
@@ -480,6 +500,7 @@ function removerSerie(payload) {
     for (let i = dados.length-1; i >= 1; i--) {
       if (String(dados[i][0]).trim() === String(payload.nrSerie).trim()) {
         aba.getRange(i+1,4).setValue('Não');
+        invalidarCacheCadastros();
         return jsonResponse({ success: true, message: 'Série desativada.' });
       }
     }
