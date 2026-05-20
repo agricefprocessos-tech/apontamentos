@@ -905,8 +905,9 @@ function renderOpGrid(id, fn) {
 
 function renderParadasGrid() {
   document.getElementById('paradaGrid').innerHTML = paradas.map(p =>
-    `<button class="parada-btn" onclick="selecionarParada(this,'${p.replace(/'/g,"\\'")}'">${p}</button>`).join('');
+    `<button class="parada-btn" onclick="selecionarParada(this,'${p.replace(/'/g,"\\'")}')"> ${p.trim()}</button>`).join('');
 }
+
 
 function selecionarOperacao(cod) {
   document.querySelectorAll('#opGrid .op-btn').forEach(b=>b.classList.remove('selected'));
