@@ -60,6 +60,22 @@ function doGet(e) {
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'getCadastros')     return getCadastros();
+  if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
+    try {
+      enviarRelatorioSemanal();
+      return jsonResponse({ success: true, message: 'Relatório enviado para ' + EMAIL_RELATORIO });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'ativarTrigger' && e.parameter.key === 'AGF2026') {
+    try {
+      criarTriggerRelatorioSemanal();
+      return jsonResponse({ success: true, message: 'Trigger semanal criado com sucesso.' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
 
   // Ações via payload GET (contorna CORS)
   if (e.parameter.payload) {
@@ -815,5 +831,540 @@ function testeGravar() {
     setup:'', obs2:'', retrabalho:'', numRNC:'', opRetrabalho:'', parada:'', lote:'',
   };
   Logger.log(gravarApontamento(payload).getContent());
+}
+
+// ================================================================
+// RELATÓRIO SEMANAL AUTOMATIZADO — v1.0
+//
+// Envio: toda segunda-feira às 07h00 (horário de Brasília)
+// Para ativar o envio automático, abra o Editor do Apps Script
+// e execute UMA VEZ a função: criarTriggerRelatorioSemanal()
+//
+// Para testar manualmente: execute enviarRelatorioSemanal()
+// ================================================================
+
+const EMAIL_RELATORIO    = 'guilherme.souza@agricef.com.br';
+const DIAS_ALERTA_ATRASO = 3; // ordens abertas há mais que isso → alerta vermelho
+
+// ---------------------------------------------------------------
+// PONTO DE ENTRADA — chamado pelo trigger ou manualmente
+// ---------------------------------------------------------------
+function enviarRelatorioSemanal() {
+  try {
+    const rel = _rsMontarRelatorio();
+    _rsEnviarEmail(rel);
+    Logger.log('✅ Relatório semanal enviado para ' + EMAIL_RELATORIO);
+  } catch (err) {
+    Logger.log('❌ Erro no relatório: ' + err.message + '\n' + err.stack);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------
+// CONFIGURAR TRIGGER SEMANAL — executar UMA VEZ pelo Editor
+// ---------------------------------------------------------------
+function criarTriggerRelatorioSemanal() {
+  // Remove triggers duplicados da mesma função
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'enviarRelatorioSemanal')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('enviarRelatorioSemanal')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(7)
+    .create();
+
+  Logger.log('✅ Trigger criado: toda segunda-feira às 07h (GMT-3).');
+}
+
+// ---------------------------------------------------------------
+// MONTAR OBJETO DO RELATÓRIO — lê planilha e computa todos os KPIs
+// ---------------------------------------------------------------
+function _rsMontarRelatorio() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) throw new Error('Aba "' + ABA_RESPOSTAS + '" não encontrada.');
+
+  const dados = aba.getDataRange().getValues();
+  const agora = new Date();
+
+  // Início da semana atual (segunda-feira 00h00)
+  const dow = agora.getDay(); // 0=dom, 1=seg ...
+  const diasAteSeg = (dow === 0) ? 6 : dow - 1;
+  const seg = new Date(agora);
+  seg.setDate(agora.getDate() - diasAteSeg);
+  seg.setHours(0, 0, 0, 0);
+
+  const segAnterior = new Date(seg);
+  segAnterior.setDate(seg.getDate() - 7);
+
+  // ----- Parse de todas as linhas relevantes -----
+  const linhas = [];
+  for (let i = 1; i < dados.length; i++) {
+    const r = dados[i];
+    if (!r[0] || !r[2]) continue;
+    const ts = _rsParseData(r[0]);
+    if (!ts) continue;
+    const tipoRaw = String(r[2]).toUpperCase();
+    let tipo = null;
+    if (tipoRaw.includes('ABERTURA') && !tipoRaw.includes('RETRABALHO')) tipo = 'ABERTURA';
+    else if (tipoRaw.includes('FECHAMENTO')) tipo = 'FECHAMENTO';
+    else continue; // ignora paradas e retrabalhos neste contexto
+    const campoF = String(r[5] || '');
+    const pts    = campoF.split('|').map(x => x.trim());
+    linhas.push({
+      ts,
+      tipo,
+      func:   String(r[1] || '').trim(),
+      op:     String(r[3] || '').trim(),
+      item:   String(r[4] || '').trim(),
+      serie:  pts[0] || '',
+      impl:   pts[1] || '',
+      client: pts[2] || '',
+      qty:    Number(r[6])  || 0,
+      qtdPl:  Number(r[14]) || 0,
+    });
+  }
+
+  // ----- Algoritmo de pareamento ABERTURA ↔ FECHAMENTO -----
+  const aberturas = linhas
+    .filter(r => r.tipo === 'ABERTURA')
+    .map(r => ({ ...r, _used: false, _fechTs: null, _leadMs: 0 }));
+
+  linhas
+    .filter(r => r.tipo === 'FECHAMENTO')
+    .forEach(fech => {
+      let melhor = null, melhorScore = -1;
+      for (let i = 0; i < aberturas.length; i++) {
+        const a = aberturas[i];
+        if (a._used || a.func !== fech.func || a.ts > fech.ts) continue;
+        let score = 1;
+        if (a.op    === fech.op)    score += 4;
+        if (a.serie === fech.serie) score += 2;
+        if (a.item  === fech.item)  score += 1;
+        if (score > melhorScore) { melhorScore = score; melhor = i; }
+      }
+      if (melhor !== null) {
+        aberturas[melhor]._used   = true;
+        aberturas[melhor]._fechTs = fech.ts;
+        aberturas[melhor]._leadMs = fech.ts - aberturas[melhor].ts;
+        aberturas[melhor]._fechOp = fech.op;
+      }
+    });
+
+  const pares   = aberturas.filter(a => a._used);
+  const backlog = aberturas.filter(a => !a._used).sort((x, y) => x.ts - y.ts);
+
+  // ----- KPIs semana atual e anterior -----
+  const kpiAtual    = _rsKpiSemana(pares, seg,         new Date(seg.getTime()          + 7 * 86400000));
+  const kpiAnterior = _rsKpiSemana(pares, segAnterior, new Date(segAnterior.getTime()  + 7 * 86400000));
+
+  // ----- Tendência 4 semanas -----
+  const trend = [];
+  for (let w = 3; w >= 0; w--) {
+    const ini = new Date(seg); ini.setDate(seg.getDate() - w * 7);
+    const fim = new Date(ini); fim.setDate(ini.getDate() + 7);
+    trend.push({ ini, fim, ..._rsKpiSemana(pares, ini, fim) });
+  }
+
+  // ----- Top operadores (semana atual) -----
+  const contOp = {};
+  pares.filter(p => p._fechTs >= seg).forEach(p => {
+    const nome = p.func.includes(' - ') ? p.func.split(' - ').slice(1).join(' ') : p.func;
+    contOp[nome] = (contOp[nome] || 0) + 1;
+  });
+  const topOperadores = Object.entries(contOp).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // ----- Top operações (semana atual) -----
+  const contOperacao = {};
+  pares.filter(p => p._fechTs >= seg).forEach(p => {
+    const op = (p._fechOp || p.op || '(sem operação)');
+    contOperacao[op] = (contOperacao[op] || 0) + 1;
+  });
+  const topOperacoes = Object.entries(contOperacao).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // ----- Alertas e recomendações -----
+  const alertas = _rsAlertas(backlog, kpiAtual, kpiAnterior, agora);
+  const recos   = _rsRecomendacoes(backlog, kpiAtual, kpiAnterior, topOperadores, topOperacoes, agora);
+
+  return {
+    agora, seg, segAnterior,
+    kpiAtual, kpiAnterior,
+    trend, topOperadores, topOperacoes,
+    backlog, alertas, recos,
+  };
+}
+
+// ---------------------------------------------------------------
+// KPIs DE UM PERÍODO
+// ---------------------------------------------------------------
+function _rsKpiSemana(pares, inicio, fim) {
+  const entregas = pares.filter(p => p._fechTs >= inicio && p._fechTs < fim);
+  const entradas = pares.filter(p => p.ts      >= inicio && p.ts      < fim);
+
+  const leadTimes = entregas
+    .map(p => p._leadMs / 3600000)
+    .filter(h => h > 0 && h < 24 * 30); // sanidade: entre 0 e 30 dias
+
+  const leadMedio = leadTimes.length
+    ? leadTimes.reduce((s, v) => s + v, 0) / leadTimes.length
+    : 0;
+
+  return {
+    throughput: entregas.length,
+    entradas:   entradas.length,
+    leadMedio,  // em horas
+  };
+}
+
+// ---------------------------------------------------------------
+// ALERTAS INTELIGENTES
+// ---------------------------------------------------------------
+function _rsAlertas(backlog, kpiAtual, kpiAnterior, agora) {
+  const lista = [];
+
+  // 1. Volume de backlog
+  if (backlog.length >= 15) {
+    lista.push({ nivel: 'CRITICO', msg: 'Backlog crítico: ' + backlog.length + ' ordens em aberto. Verifique gargalos e redistribua a carga imediatamente.' });
+  } else if (backlog.length >= 8) {
+    lista.push({ nivel: 'ATENCAO', msg: 'Backlog elevado: ' + backlog.length + ' ordens em aberto. Monitorar evolução ao longo da semana.' });
+  }
+
+  // 2. Ordens antigas sem fechamento
+  const limiteMs = DIAS_ALERTA_ATRASO * 86400 * 1000;
+  const antigas  = backlog.filter(o => (agora - o.ts) > limiteMs);
+  if (antigas.length > 0) {
+    const series = [...new Set(antigas.map(o => o.serie).filter(Boolean))].slice(0, 3).join(', ');
+    lista.push({
+      nivel: 'ATENCAO',
+      msg: antigas.length + ' ordem(ns) aberta(s) há mais de ' + DIAS_ALERTA_ATRASO + ' dias sem fechamento.'
+           + (series ? ' Séries: ' + series + '.' : ''),
+    });
+  }
+
+  // 3. Queda de throughput ≥ 25%
+  if (kpiAnterior.throughput > 0) {
+    const pct = Math.round(((kpiAtual.throughput - kpiAnterior.throughput) / kpiAnterior.throughput) * 100);
+    if (pct <= -25) {
+      lista.push({ nivel: 'ATENCAO', msg: 'Queda de ' + Math.abs(pct) + '% no throughput vs. semana anterior (' + kpiAnterior.throughput + ' → ' + kpiAtual.throughput + ' entregas).' });
+    }
+  }
+
+  // 4. Semana sem nenhum fechamento
+  if (kpiAtual.throughput === 0) {
+    lista.push({ nivel: 'CRITICO', msg: 'Nenhum fechamento registrado nesta semana. Verifique se os operadores estão utilizando o sistema.' });
+  }
+
+  // 5. Lead time alto (> 8h)
+  if (kpiAtual.leadMedio > 8) {
+    lista.push({ nivel: 'ATENCAO', msg: 'Lead time médio elevado: ' + kpiAtual.leadMedio.toFixed(1) + 'h. Pode indicar espera de material, retrabalho ou operações subdimensionadas.' });
+  }
+
+  // 6. Entradas muito acima de saídas
+  if (kpiAtual.entradas > 0 && kpiAtual.throughput > 0 && kpiAtual.entradas > kpiAtual.throughput * 1.5) {
+    lista.push({ nivel: 'ATENCAO', msg: 'Entradas (' + kpiAtual.entradas + ') superam entregas (' + kpiAtual.throughput + ') em ' + Math.round(((kpiAtual.entradas / kpiAtual.throughput) - 1) * 100) + '%. O backlog tende a crescer.' });
+  }
+
+  return lista;
+}
+
+// ---------------------------------------------------------------
+// RECOMENDAÇÕES CONTEXTUAIS
+// ---------------------------------------------------------------
+function _rsRecomendacoes(backlog, kpiAtual, kpiAnterior, topOp, topOperacoes, agora) {
+  const lista = [];
+  const limiteMs = DIAS_ALERTA_ATRASO * 86400 * 1000;
+  const antigas  = backlog.filter(o => (agora - o.ts) > limiteMs);
+
+  if (antigas.length > 0) {
+    lista.push('⚡ Priorizar o fechamento das ' + antigas.length + ' ordem(ns) com mais de ' + DIAS_ALERTA_ATRASO + ' dias em aberto. Conversar diretamente com os operadores envolvidos para identificar impedimentos.');
+  }
+
+  if (kpiAnterior.throughput > 0 && kpiAtual.throughput < kpiAnterior.throughput) {
+    lista.push('📉 Throughput abaixo do período anterior. Revisar distribuição de tarefas, checar se houve paradas não registradas e avaliar se há recursos disponíveis para reforço.');
+  }
+
+  if (backlog.length > 5) {
+    const opBacklog = {};
+    backlog.forEach(o => { const k = o.op || ''; if (k) opBacklog[k] = (opBacklog[k] || 0) + 1; });
+    const gargalos = Object.entries(opBacklog).sort((a, b) => b[1] - a[1]).slice(0, 2).map(e => e[0]).join(', ');
+    if (gargalos) {
+      lista.push('🔍 Operações com maior concentração no backlog: ' + gargalos + '. Avaliar reforço de equipe ou resequenciamento nessas etapas.');
+    }
+  }
+
+  if (kpiAtual.leadMedio > 6) {
+    lista.push('⏱ Lead time médio de ' + kpiAtual.leadMedio.toFixed(1) + 'h. Investigar se operações podem ser subdivididas, paralelizadas ou se há tempos de espera desnecessários no processo.');
+  }
+
+  if (kpiAtual.entradas > kpiAtual.throughput * 1.3 && kpiAtual.entradas > 0) {
+    lista.push('📥 Volume de entradas supera entregas em mais de 30%. Considerar priorização de carteira ou alocação de capacidade extra para evitar crescimento contínuo do backlog.');
+  }
+
+  if (topOp.length > 0) {
+    lista.push('🏆 Destaque da semana: ' + topOp[0][0] + ' com ' + topOp[0][1] + ' fechamentos. Identificar boas práticas deste operador e replicar para a equipe.');
+  }
+
+  if (lista.length === 0) {
+    lista.push('✅ Indicadores dentro do esperado. Manter cadência de apontamentos e foco na antecipação de demandas para as próximas semanas.');
+  }
+
+  return lista;
+}
+
+// ---------------------------------------------------------------
+// GERAÇÃO DO HTML DO EMAIL
+// ---------------------------------------------------------------
+function _rsGerarHtml(rel) {
+  const { agora, seg, kpiAtual, kpiAnterior, trend, topOperadores, topOperacoes, backlog, alertas, recos } = rel;
+
+  const fmt  = d => Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy');
+  const fmtH = h => h < 1 ? Math.round(h * 60) + 'min' : h.toFixed(1) + 'h';
+
+  const fimSem     = new Date(seg.getTime() + 6 * 86400000);
+  const semanaStr  = fmt(seg) + ' – ' + fmt(fimSem);
+  const dataEnvio  = Utilities.formatDate(agora, 'GMT-3', "dd/MM/yyyy 'às' HH:mm");
+
+  // Delta throughput
+  const deltaTP    = kpiAnterior.throughput > 0
+    ? Math.round(((kpiAtual.throughput - kpiAnterior.throughput) / kpiAnterior.throughput) * 100)
+    : null;
+  const deltaTPStr   = deltaTP === null ? '—' : (deltaTP >= 0 ? '▲ ' + deltaTP + '%' : '▼ ' + Math.abs(deltaTP) + '%');
+  const deltaTPColor = deltaTP === null ? '#8b949e' : (deltaTP >= 0 ? '#4ade80' : '#f87171');
+
+  // Cor do KPI backlog
+  const corBacklog = backlog.length >= 15 ? '#f87171' : backlog.length >= 8 ? '#fb923c' : '#4ade80';
+
+  // ----- HTML: Alertas -----
+  let htmlAlertas = '';
+  if (alertas.length === 0) {
+    htmlAlertas = '<tr><td style="padding:12px 16px;color:#4ade80;font-size:14px;">✅ Nenhum alerta crítico esta semana.</td></tr>';
+  } else {
+    alertas.forEach(function(a) {
+      var cor = a.nivel === 'CRITICO' ? '#f87171' : '#fb923c';
+      var ico = a.nivel === 'CRITICO' ? '🔴' : '🟡';
+      htmlAlertas += '<tr><td style="padding:9px 14px 9px 16px;border-left:3px solid ' + cor + ';background:#1a2030;border-radius:0 4px 4px 0;font-size:13px;color:#e6edf3;margin-bottom:4px;">'
+        + ico + ' ' + a.msg + '</td></tr>';
+    });
+  }
+
+  // ----- HTML: Recomendações -----
+  var htmlRecos = '';
+  recos.forEach(function(r) {
+    htmlRecos += '<tr><td style="padding:9px 16px;font-size:13px;color:#e6edf3;border-bottom:1px solid #252d40;line-height:1.5;">' + r + '</td></tr>';
+  });
+
+  // ----- HTML: Top Operadores -----
+  var htmlTopOp = '';
+  var medalhas = ['🥇','🥈','🥉','4°','5°'];
+  topOperadores.forEach(function(entry, i) {
+    htmlTopOp += '<tr>'
+      + '<td style="padding:7px 12px;font-size:20px;width:32px;">' + (medalhas[i] || (i+1)+'°') + '</td>'
+      + '<td style="padding:7px 8px;font-size:13px;color:#e6edf3;">' + entry[0] + '</td>'
+      + '<td style="padding:7px 12px;font-size:14px;font-weight:700;color:#f0b429;text-align:right;">' + entry[1] + '</td>'
+      + '</tr>';
+  });
+  if (!htmlTopOp) htmlTopOp = '<tr><td colspan="3" style="padding:12px;color:#8b949e;font-size:13px;text-align:center;">Sem fechamentos nesta semana.</td></tr>';
+
+  // ----- HTML: Top Operações -----
+  var htmlTopOper = '';
+  topOperacoes.forEach(function(entry) {
+    htmlTopOper += '<tr>'
+      + '<td style="padding:7px 14px;font-size:13px;color:#e6edf3;">' + entry[0] + '</td>'
+      + '<td style="padding:7px 14px;font-size:13px;color:#38bdf8;font-weight:700;text-align:right;">' + entry[1] + '</td>'
+      + '</tr>';
+  });
+  if (!htmlTopOper) htmlTopOper = '<tr><td colspan="2" style="padding:12px;color:#8b949e;font-size:13px;text-align:center;">Sem dados.</td></tr>';
+
+  // ----- HTML: Backlog -----
+  var htmlBacklog = '';
+  var backlogTop10 = backlog.slice(0, 10);
+  if (backlogTop10.length === 0) {
+    htmlBacklog = '<tr><td colspan="4" style="padding:14px;color:#4ade80;font-size:13px;text-align:center;">✅ Nenhuma ordem em aberto.</td></tr>';
+  } else {
+    backlogTop10.forEach(function(o) {
+      var diasAberto = Math.floor((agora - o.ts) / 86400000);
+      var corDias    = diasAberto >= DIAS_ALERTA_ATRASO ? '#f87171' : '#8b949e';
+      var peso       = diasAberto >= DIAS_ALERTA_ATRASO ? '700' : '400';
+      var nome       = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
+      htmlBacklog += '<tr>'
+        + '<td style="padding:6px 10px;font-size:12px;color:#8b949e;border-bottom:1px solid #252d40;">' + fmt(new Date(o.ts)) + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;color:#e6edf3;border-bottom:1px solid #252d40;">' + nome + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;color:#8b949e;border-bottom:1px solid #252d40;">' + (o.op || '—') + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;color:' + corDias + ';font-weight:' + peso + ';border-bottom:1px solid #252d40;text-align:right;">' + diasAberto + 'd</td>'
+        + '</tr>';
+    });
+    if (backlog.length > 10) {
+      htmlBacklog += '<tr><td colspan="4" style="padding:8px 10px;font-size:12px;color:#8b949e;text-align:center;">… e mais ' + (backlog.length - 10) + ' ordem(ns) em aberto</td></tr>';
+    }
+  }
+
+  // ----- HTML: Trend 4 semanas (barras inline) -----
+  var maxTrend = Math.max.apply(null, trend.map(function(t){ return Math.max(t.throughput, t.entradas, 1); }));
+  var htmlTrend = '';
+  trend.forEach(function(t, i) {
+    var isAtual  = (i === 3);
+    var hTp      = Math.max(4, Math.round((t.throughput / maxTrend) * 80));
+    var hEn      = Math.max(4, Math.round((t.entradas   / maxTrend) * 80));
+    var corTp    = isAtual ? '#f0b429' : '#4ade80';
+    var semLabel = fmt(t.ini).substring(0, 5);
+    htmlTrend += '<td style="text-align:center;padding:0 10px;vertical-align:bottom;">'
+      + '<div style="display:inline-block;vertical-align:bottom;">'
+      + '<div style="width:14px;height:' + hEn + 'px;background:#38bdf8;opacity:0.7;border-radius:2px 2px 0 0;display:inline-block;vertical-align:bottom;margin-right:2px;" title="Entradas: ' + t.entradas + '"></div>'
+      + '<div style="width:14px;height:' + hTp + 'px;background:' + corTp + ';border-radius:2px 2px 0 0;display:inline-block;vertical-align:bottom;" title="Saídas: ' + t.throughput + '"></div>'
+      + '</div>'
+      + '<div style="font-size:10px;color:' + (isAtual ? '#f0b429' : '#8b949e') + ';margin-top:5px;font-weight:' + (isAtual ? '700' : '400') + ';">' + semLabel + '</div>'
+      + '<div style="font-size:12px;color:' + corTp + ';font-weight:700;">' + t.throughput + '</div>'
+      + '</td>';
+  });
+
+  // ===== MONTAGEM FINAL DO HTML =====
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+    + '<body style="margin:0;padding:0;background:#0a0e17;font-family:Arial,Helvetica,sans-serif;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0e17;padding:24px 12px;">'
+    + '<tr><td align="center">'
+    + '<table width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%;">'
+
+    // ── CABEÇALHO ──
+    + '<tr><td style="background:#0d1117;border-bottom:3px solid #f0b429;padding:24px 28px;border-radius:12px 12px 0 0;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+    + '<td><div style="font-size:26px;font-weight:900;color:#f0b429;letter-spacing:3px;line-height:1;">AGRICEF</div>'
+    + '<div style="font-size:11px;color:#58677a;letter-spacing:2px;margin-top:3px;text-transform:uppercase;">Sistema de Apontamento de Produção</div></td>'
+    + '<td align="right">'
+    + '<div style="font-size:16px;font-weight:700;color:#e6edf3;">📊 Relatório Semanal</div>'
+    + '<div style="font-size:12px;color:#8b949e;margin-top:4px;">Semana: ' + semanaStr + '</div>'
+    + '<div style="font-size:11px;color:#58677a;margin-top:2px;">Gerado em: ' + dataEnvio + '</div>'
+    + '</td></tr></table></td></tr>'
+
+    // ── KPI CARDS ──
+    + '<tr><td style="background:#111722;padding:20px 28px 12px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+
+    + '<td style="width:25%;padding:4px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;border-top:3px solid #4ade80;">'
+    + '<tr><td style="padding:14px 12px;">'
+    + '<div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">ENTREGAS</div>'
+    + '<div style="font-size:30px;font-weight:900;color:#4ade80;line-height:1;">' + kpiAtual.throughput + '</div>'
+    + '<div style="font-size:11px;color:' + deltaTPColor + ';margin-top:4px;">' + deltaTPStr + ' vs sem. ant.</div>'
+    + '</td></tr></table></td>'
+
+    + '<td style="width:25%;padding:4px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;border-top:3px solid #38bdf8;">'
+    + '<tr><td style="padding:14px 12px;">'
+    + '<div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">ENTRADAS</div>'
+    + '<div style="font-size:30px;font-weight:900;color:#38bdf8;line-height:1;">' + kpiAtual.entradas + '</div>'
+    + '<div style="font-size:11px;color:#8b949e;margin-top:4px;">novas ordens</div>'
+    + '</td></tr></table></td>'
+
+    + '<td style="width:25%;padding:4px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;border-top:3px solid ' + corBacklog + ';">'
+    + '<tr><td style="padding:14px 12px;">'
+    + '<div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">BACKLOG</div>'
+    + '<div style="font-size:30px;font-weight:900;color:' + corBacklog + ';line-height:1;">' + backlog.length + '</div>'
+    + '<div style="font-size:11px;color:#8b949e;margin-top:4px;">em aberto</div>'
+    + '</td></tr></table></td>'
+
+    + '<td style="width:25%;padding:4px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;border-top:3px solid #a78bfa;">'
+    + '<tr><td style="padding:14px 12px;">'
+    + '<div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">LEAD TIME</div>'
+    + '<div style="font-size:30px;font-weight:900;color:#a78bfa;line-height:1;">' + (kpiAtual.leadMedio > 0 ? fmtH(kpiAtual.leadMedio) : '—') + '</div>'
+    + '<div style="font-size:11px;color:#8b949e;margin-top:4px;">tempo médio/op</div>'
+    + '</td></tr></table></td>'
+
+    + '</tr></table></td></tr>'
+
+    // ── ALERTAS ──
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">🚨 Alertas da Semana</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="3">' + htmlAlertas + '</table>'
+    + '</td></tr>'
+
+    // ── TENDÊNCIA 4 SEMANAS ──
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">📈 Tendência de Produção (4 semanas)</div>'
+    + '<table cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;padding:12px 8px;width:100%;">'
+    + '<tr><td style="padding:4px 14px 10px;" colspan="4">'
+    + '<span style="display:inline-block;width:10px;height:10px;background:#38bdf8;border-radius:2px;margin-right:4px;opacity:0.7;"></span>'
+    + '<span style="font-size:11px;color:#8b949e;">Entradas &nbsp;</span>'
+    + '<span style="display:inline-block;width:10px;height:10px;background:#4ade80;border-radius:2px;margin-right:4px;"></span>'
+    + '<span style="font-size:11px;color:#8b949e;">Saídas</span>'
+    + '</td></tr>'
+    + '<tr>' + htmlTrend + '</tr>'
+    + '</table></td></tr>'
+
+    // ── TOP OPERADORES + TOP OPERAÇÕES ──
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+
+    + '<td style="width:50%;vertical-align:top;padding-right:8px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">👷 Top Operadores</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlTopOp + '</table>'
+    + '</td>'
+
+    + '<td style="width:50%;vertical-align:top;padding-left:8px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">⚙️ Operações com + Saídas</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlTopOper + '</table>'
+    + '</td>'
+
+    + '</tr></table></td></tr>'
+
+    // ── BACKLOG DETALHADO ──
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">📋 Backlog Atual — ' + backlog.length + ' ordem' + (backlog.length !== 1 ? 's' : '') + ' em aberto</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">'
+    + '<tr style="background:#141a28;">'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;font-weight:600;border-bottom:1px solid #252d40;">ABERTURA</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;font-weight:600;border-bottom:1px solid #252d40;">OPERADOR</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;font-weight:600;border-bottom:1px solid #252d40;">OPERAÇÃO</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:right;font-weight:600;border-bottom:1px solid #252d40;">DIAS</th>'
+    + '</tr>'
+    + htmlBacklog
+    + '</table></td></tr>'
+
+    // ── RECOMENDAÇÕES ──
+    + '<tr><td style="background:#111722;padding:4px 28px 24px;border-radius:0 0 0 0;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">💡 Recomendações</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlRecos + '</table>'
+    + '</td></tr>'
+
+    // ── FOOTER ──
+    + '<tr><td style="background:#0d1117;padding:16px 28px;border-radius:0 0 12px 12px;border-top:1px solid #1c2230;text-align:center;">'
+    + '<div style="font-size:11px;color:#58677a;">Este relatório é gerado automaticamente toda segunda-feira às 07h00 (Brasília).</div>'
+    + '<div style="font-size:11px;color:#3a4460;margin-top:4px;">AGRICEF — Dashboard de Produção · Sistema de Apontamento v4</div>'
+    + '</td></tr>'
+
+    + '</table>'
+    + '</td></tr></table>'
+    + '</body></html>';
+}
+
+// ---------------------------------------------------------------
+// ENVIO DO EMAIL
+// ---------------------------------------------------------------
+function _rsEnviarEmail(rel) {
+  var dataStr = Utilities.formatDate(rel.agora, 'GMT-3', 'dd/MM/yyyy');
+  var html    = _rsGerarHtml(rel);
+  MailApp.sendEmail({
+    to:       EMAIL_RELATORIO,
+    subject:  '📊 AGRICEF | Relatório Semanal de Produção — ' + dataStr,
+    htmlBody: html,
+  });
+}
+
+// ---------------------------------------------------------------
+// PARSER DE DATA — converte string dd/MM/yyyy HH:mm:ss → Date
+// ---------------------------------------------------------------
+function _rsParseData(val) {
+  if (!val) return null;
+  if (val instanceof Date) return val;
+  const s = String(val).trim();
+  // Formato principal: dd/MM/yyyy HH:mm:ss
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]);
+  // Fallback genérico
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 }
 
