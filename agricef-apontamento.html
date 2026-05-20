@@ -818,8 +818,35 @@ function selecionarTipo(tipo) {
     if (state.modoLote) { mostrar('blocoLote'); renderLoteSeriesGrid(); }
   }
   else if (tipo==='FECHAMENTO')         { mostrar('blocoFechamentoInteligente'); preencherFechamentoSeAberto(); }
-  else if (tipo.includes('RETRABALHO')) mostrar('blocoRetrabalho');
-  else if (tipo.includes('PARADA'))     mostrar('blocoParada');
+  else if (tipo.includes('RETRABALHO')) {
+    mostrar('blocoRetrabalho');
+    // TÉRMINO: pré-seleciona o tipo de retrabalho da abertura em aberto
+    if (tipo === 'TERMINO_RETRABALHO' && state.abertoInfo) {
+      const rt = state.abertoInfo.operacao || '';
+      state.retrabalho = rt;
+      document.querySelectorAll('#opGridRetrabalho .op-btn').forEach(btn => {
+        btn.classList.remove('selected');
+        if (btn.textContent.trim() === rt || (btn.getAttribute('onclick')||'').includes(rt.replace(/'/g,"\\'"))) {
+          btn.classList.add('selected');
+        }
+      });
+    }
+  }
+  else if (tipo.includes('PARADA')) {
+    mostrar('blocoParada');
+    // TÉRMINO: pré-seleciona o tipo de parada da abertura em aberto
+    if (tipo === 'TERMINO_PARADA' && state.abertoInfo) {
+      let pt = state.abertoInfo.operacao || '';
+      if (pt === 'SET - UP') pt = 'Set-up'; // reverte mapeamento do backend
+      state.parada = pt;
+      if (pt === 'Set-up') mostrar('blocoSetup'); else esconder('blocoSetup');
+      document.querySelectorAll('#paradaGrid .parada-btn').forEach(btn => {
+        btn.classList.remove('selected');
+        const m = (btn.getAttribute('onclick')||'').match(/selecionarParada\(this,'(.+?)'\)/);
+        if (m && m[1] === pt) btn.classList.add('selected');
+      });
+    }
+  }
 
   atualizarSteps(3);
 }
