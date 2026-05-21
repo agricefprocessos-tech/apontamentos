@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Novo Projeto PCP — Hauler | Agricef</title>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --card:     #161b22;
+    --border:   #30363d;
+    --primary:  #2ea043;
+    --primary-h:#3fb950;
+    --text:     #e6edf3;
+    --muted:    #8b949e;
+    --accent:   #388bfd;
+    --warn:     #d29922;
+    --danger:   #f85149;
+    --radius:   10px;
+    --shadow:   0 2px 12px rgba(0,0,0,.4);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+    padding: 24px 16px 60px;
+  }
+
+  /* ── HEADER ── */
+  .page-header {
+    max-width: 760px;
+    margin: 0 auto 28px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo {
+    width: 44px; height: 44px;
+    background: var(--primary);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 18px; color: #fff; flex-shrink: 0;
+  }
+  .page-header h1 { font-size: 20px; font-weight: 600; color: var(--text); }
+  .page-header p  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ── FORM WRAPPER ── */
+  form {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  /* ── CARD / SECTION ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+  }
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title::before {
+    content: '';
+    width: 3px; height: 14px;
+    background: var(--primary);
+    border-radius: 2px;
+  }
+
+  /* ── GRID ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .span-2 { grid-column: span 2; }
+
+  /* ── FIELD ── */
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  label  { font-size: 12px; color: var(--muted); font-weight: 500; }
+  label .req { color: var(--danger); margin-left: 2px; }
+
+  input[type=text], input[type=date], select, textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 14px;
+    padding: 8px 10px;
+    width: 100%;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input[type=text]:focus,
+  input[type=date]:focus,
+  select:focus { border-color: var(--accent); }
+
+  select option { background: var(--card); }
+
+  /* ── SERIAL ROW ── */
+  .serial-row { display: flex; gap: 8px; }
+  .serial-row input { flex: 1; }
+  .serial-row button {
+    white-space: nowrap;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 0 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .serial-row button:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── CHIPS (checkboxes) ── */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip  {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--muted);
+    transition: all .15s;
+    user-select: none;
+  }
+  .chip:has(input:checked) {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: rgba(46,160,67,.08);
+  }
+  .chip input { display: none; }
+
+  /* ── SCORE ── */
+  .score-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .score-preview {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 100px;
+  }
+  .score-val { font-size: 36px; font-weight: 700; color: var(--primary); }
+  .score-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: .3px;
+  }
+  .score-formula { font-size: 11px; color: var(--muted); text-align: center; }
+
+  /* ── PREVIEW BOX ── */
+  .preview-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    color: var(--text);
+    word-break: break-all;
+    min-height: 36px;
+  }
+  .preview-box.dim { color: var(--muted); font-style: italic; }
+
+  /* ── GANTT PREVIEW ── */
+  .gantt { width: 100%; font-size: 12px; color: var(--text); }
+  .gantt tr { border-bottom: 1px solid var(--border); }
+  .gantt td { padding: 5px 8px; vertical-align: middle; }
+  .gantt .ph-name { color: var(--muted); width: 180px; }
+  .gantt .ph-bar  { }
+  .bar-inner {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--primary);
+    opacity: .75;
+  }
+  .bar-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .gantt .ph-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-align: right;
+    white-space: nowrap;
+  }
+  .badge-f1 { color: var(--accent); }
+  .badge-f2 { color: var(--warn); }
+
+  /* ── SUBMIT ── */
+  .submit-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-end;
+  }
+  .btn-submit {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 28px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .btn-submit:hover { background: var(--primary-h); }
+  .btn-submit:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-hint { font-size: 12px; color: var(--muted); }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: var(--shadow);
+  }
+  .modal h2 { font-size: 18px; margin-bottom: 12px; }
+  .modal.success h2 { color: var(--primary); }
+  .modal.error   h2 { color: var(--danger); }
+  .modal p { color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .modal .links { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .modal a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .modal a:hover { text-decoration: underline; }
+  .modal-close {
+    margin-top: 20px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 6px;
+    padding: 8px 20px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: border-color .15s;
+  }
+  .modal-close:hover { border-color: var(--text); color: var(--text); }
+
+  /* ── SPINNER ── */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 2px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+
+  /* ── HINT ── */
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .badge {
+    display: inline-block;
+    background: rgba(56,139,253,.15);
+    color: var(--accent);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  @media (max-width: 560px) {
+    .grid-2, .grid-3, .score-grid { grid-template-columns: 1fr; }
+    .span-2 { grid-column: span 1; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div class="logo">A</div>
+  <div>
+    <h1>Novo Projeto PCP — Hauler</h1>
+    <p>Cria tarefa pai + subtarefas no Jira com datas estimadas • 100% via API</p>
+  </div>
+</div>
+
+<form id="mainForm" onsubmit="submitForm(event)">
+
+  <!-- ── PRODUTO & FASES ── -->
+  <div class="card">
+    <div class="card-title">Produto &amp; Fases</div>
+    <div class="grid-2">
+      <div class="field">
+        <label>Diâmetro do tubo <span class="req">*</span>
+          <span class="hint" style="display:inline;margin-left:6px;">⚠ erro aqui = 3 meses retrabalho</span>
+        </label>
+        <select id="diametro" required onchange="updatePreviews()">
+          <option value="">Selecione o diâmetro…</option>
+          <option value="8">8&quot; (Hauler 8 polegadas)</option>
+          <option value="10">10&quot; (Hauler 10 polegadas — padrão)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Fases a criar <span class="req">*</span></label>
+        <select id="criarFases" required onchange="toggleFaseFields(); updatePreviews()">
+          <option value="ambas">F1 + F2 juntas (recomendado)</option>
+          <option value="f1">Somente F1</option>
+          <option value="f2">Somente F2</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── IDENTIFICAÇÃO ── -->
+  <div class="card">
+    <div class="card-title">Identificação</div>
+    <div class="grid-3">
+      <div class="field">
+        <label>Destino <span class="req">*</span></label>
+        <select id="destino" required onchange="toggleDestinoFields(); updatePreviews()">
+          <option value="cliente">Cliente direto</option>
+          <option value="estoque">Estoque (sem cliente)</option>
+          <option value="interno">Interno (Agricef)</option>
+        </select>
+      </div>
+      <div class="field" id="clienteNomeField">
+        <label>Cliente <span class="req">*</span></label>
+        <select id="clienteSelect" onchange="syncCliente()">
+          <option value="">Selecione…</option>
+          <option value="São Martinho">São Martinho</option>
+          <option value="Atvos">Atvos</option>
+          <option value="VITERRA">VITERRA</option>
+          <option value="DELTA">DELTA</option>
+          <option value="Viralco">Viralco</option>
+          <option value="COFCO">COFCO</option>
+          <option value="DEXCO">DEXCO</option>
+          <option value="SUZANO">SUZANO</option>
+          <option value="outro">Outro…</option>
+        </select>
+        <input type="text" id="clienteNomeCustom" placeholder="Nome do cliente" style="display:none;margin-top:6px;" oninput="updatePreviews()">
+      </div>
+      <div class="field" id="clienteNumField">
+        <label>Nº / identificador do cliente</label>
+        <input type="text" id="clienteNumero" placeholder="ex: 4 (ATVOS 4)" oninput="updatePreviews()">
+        <p class="hint">Opcional — aparece no nome do projeto</p>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <div class="field">
+        <label>Número de série <span class="req">*</span></label>
+        <div class="serial-row">
+          <input type="text" id="serial" placeholder="S22000086" required
+                 pattern="S\d{8}" title="Formato: S22000XXX"
+                 oninput="updatePreviews()">
+          <button type="button" onclick="sugerirSerial()">⟳ Sugerir próximo</button>
+        </div>
+        <p class="hint">Formato: S22000XXX — sequencial único por projeto</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── CONFIGURAÇÃO HAULER ── -->
+  <div class="card">
+    <div class="card-title">Configuração Hauler</div>
+    <div class="grid-2" style="margin-bottom:16px;">
+      <div class="field">
+        <label>Fabricação da carroceria <span class="req">*</span></label>
+        <select id="fabricacaoCarroceria" required onchange="updatePreviews()">
+          <option value="externa">OSTI externa (lead time 20 dias fixo)</option>
+          <option value="interna">OSTI interna</option>
+          <option value="agricef">Agricef</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Variantes da F2</label>
+      <div class="chips">
+        <label class="chip">
+          <input type="checkbox" id="alongamento" onchange="toggleVariantes(); updatePreviews()">
+          🔧 Requer alongamento de chassi (+2 semanas)
+        </label>
+        <label class="chip">
+          <input type="checkbox" id="extensao" onchange="toggleVariantes(); updatePreviews()">
+          📐 Requer fabricação de extensão (+1 semana)
+        </label>
+      </div>
+      <p class="hint" id="varianteHint" style="color:var(--warn);display:none;">
+        ⚠ Selecione apenas uma variante por vez.
+      </p>
+    </div>
+  </div>
+
+  <!-- ── CRONOGRAMA ── -->
+  <div class="card">
+    <div class="card-title">Cronograma</div>
+    <div class="grid-2" id="cronF1Section">
+      <div class="field">
+        <label>Data início F1 — DIA A <span class="req">*</span></label>
+        <input type="date" id="startDate" required onchange="updatePreviews()">
+      </div>
+      <div class="field">
+        <label>Data contratada / Baseline F1</label>
+        <input type="date" id="baselineDate" onchange="updatePreviews()">
+        <p class="hint">Se vazio: calculado como Início + 100 dias</p>
+      </div>
+    </div>
+    <div class="grid-2" id="cronF2Section" style="margin-top:14px;">
+      <div class="field">
+        <label>DIA C — Chegada do caminhão <span class="req" id="diaCReq">*</span></label>
+        <input type="date" id="diaC" onchange="updatePreviews()">
+        <p class="hint">Pré-condição obrigatória para F2 (Montagens Osti)</p>
+      </div>
+      <div class="field">
+        <label>Data alvo interna</label>
+        <input type="date" id="alvoDate" onchange="updatePreviews()">
+        <p class="hint">Meta interna — pode diferir do Baseline</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PRIORIZAÇÃO ESTRATÉGICA ── -->
+  <div class="card">
+    <div class="card-title">Priorização Estratégica</div>
+    <div class="score-grid">
+      <div>
+        <div class="grid-2" style="gap:12px;">
+          <div class="field">
+            <label>Impacto Financeiro <span class="req">*</span></label>
+            <select id="impactoFinanceiro" required onchange="calcScore()">
+              <option value="">Selecione…</option>
+              <option value="Transformacional">🔥 Transformacional (&gt;R$1M)</option>
+              <option value="Estratégico">⭐ Estratégico (R$500k–1M)</option>
+              <option value="Relevante">✅ Relevante (R$150k–500k)</option>
+              <option value="Incremental">📌 Incremental (R$50k–150k)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Alinhamento Estratégico <span class="req">*</span></label>
+            <select id="alinhamento" required onchange="calcScore()">
+              <option value="">Selecione…</option>
+              <option value="Core Business">Core Business</option>
+              <option value="Diferenciação">Diferenciação</option>
+              <option value="Sustentação">Sustentação</option>
+              <option value="Apoio">Apoio</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Urgência / Janela <span class="req">*</span></label>
+            <select id="urgencia" required onchange="calcScore()">
+              <option value="">Selecione…</option>
+              <option value="Imediata (Crítica)">🚨 Imediata (Crítica)</option>
+              <option value="Alta (Proximo Trimestre)">📅 Alta (Próx. Trimestre)</option>
+              <option value="Média (Semestral)">⏳ Média (Semestral)</option>
+              <option value="Baixa (Desejável)">💤 Baixa (Desejável)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Complexidade <span class="req">*</span></label>
+            <select id="complexidade" required onchange="calcScore()">
+              <option value="">Selecione…</option>
+              <option value="Simples">✔ Simples (tecnologia conhecida)</option>
+              <option value="Alta Tecnologia">⚙ Alta Tecnologia / Nova</option>
+              <option value="Nova / Alta Incerteza">🔬 Nova / Alta Incerteza</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="score-preview" id="scorePreview">
+        <div style="color:var(--muted);font-size:13px;">Preencha os pilares</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── GOVERNANÇA ── -->
+  <div class="card">
+    <div class="card-title">Governança</div>
+    <div class="grid-2">
+      <div class="field">
+        <label>Classificação Estratégica <span class="req">*</span></label>
+        <select id="classificacao" required>
+          <option value="">Selecione…</option>
+          <option value="Receita direta">Receita direta</option>
+          <option value="Sustentação e Excelência Operacional">Sustentação e Excelência Operacional</option>
+          <option value="Estratégico e Posicionamento">Estratégico e Posicionamento</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PREVIEW ── -->
+  <div class="card">
+    <div class="card-title">Preview do Projeto</div>
+    <div class="field" style="margin-bottom:14px;">
+      <label>Nome da tarefa (Summary) — F1</label>
+      <div class="preview-box dim" id="prevSummaryF1">Preencha produto e identificação acima…</div>
+    </div>
+    <div class="field" id="prevF2Block">
+      <label>Nome da tarefa (Summary) — F2</label>
+      <div class="preview-box dim" id="prevSummaryF2">—</div>
+    </div>
+
+    <div style="margin-top:18px;">
+      <label style="display:block;margin-bottom:10px;font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px;">Cronograma estimado</label>
+      <table class="gantt" id="ganttTable">
+        <tbody id="ganttBody">
+          <tr><td colspan="3" style="color:var(--muted);padding:10px;font-size:12px;">Preencha as datas para ver o cronograma estimado…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── SUBMIT ── -->
+  <div class="card">
+    <div class="submit-row">
+      <span class="btn-hint" id="submitHint"></span>
+      <button type="submit" class="btn-submit" id="btnSubmit">
+        Criar projeto no Jira
+      </button>
+    </div>
+  </div>
+
+</form>
+
+<!-- ── MODAL DE RESULTADO ── -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modal">
+    <h2 id="modalTitle"></h2>
+    <p id="modalMsg"></p>
+    <div class="links" id="modalLinks"></div>
+    <br>
+    <button class="modal-close" onclick="closeModal()">Fechar</button>
+  </div>
+</div>
+
+<script>
+// ─── ESTADO ──────────────────────────────────────────────────
+const SCORE_WEIGHTS = { f: 0.40, e: 0.30, u: 0.15, c: 0.15 };
+
+const SCORE_MAP = {
+  impactoFinanceiro: {
+    'Transformacional': 5, 'Estratégico': 4, 'Relevante': 3, 'Incremental': 2
+  },
+  alinhamento: {
+    'Core Business': 5, 'Diferenciação': 4, 'Sustentação': 3, 'Apoio': 2
+  },
+  urgencia: {
+    'Imediata (Crítica)': 5, 'Alta (Proximo Trimestre)': 4,
+    'Média (Semestral)': 3, 'Baixa (Desejável)': 2
+  },
+  complexidade: {
+    'Simples': 5, 'Alta Tecnologia': 3, 'Nova / Alta Incerteza': 1
+  }
+};
+
+// ─── INIT ────────────────────────────────────────────────────
+window.onload = function() {
+  const today = new Date().toISOString().split('T')[0];
+  document.getElementById('startDate').value = today;
+  toggleFaseFields();
+  toggleDestinoFields();
+  updatePreviews();
+};
+
+// ─── TOGGLE FASES ────────────────────────────────────────────
+function toggleFaseFields() {
+  const fase = document.getElementById('criarFases').value;
+  const f1   = document.getElementById('cronF1Section');
+  const f2   = document.getElementById('cronF2Section');
+  const f2Block = document.getElementById('prevF2Block');
+  const diaCReq = document.getElementById('diaCReq');
+  const diaCInput = document.getElementById('diaC');
+
+  f1.style.display = (fase === 'f2') ? 'none' : 'grid';
+  f2.style.display = (fase === 'f1') ? 'none' : 'grid';
+  f2Block.style.display = (fase === 'f1') ? 'none' : 'block';
+
+  document.getElementById('startDate').required = (fase !== 'f2');
+  diaCInput.required = (fase !== 'f1');
+}
+
+// ─── TOGGLE DESTINO ──────────────────────────────────────────
+function toggleDestinoFields() {
+  const dest    = document.getElementById('destino').value;
+  const nField  = document.getElementById('clienteNomeField');
+  const numField = document.getElementById('clienteNumField');
+
+  nField.style.display  = (dest === 'cliente') ? 'block' : 'none';
+  numField.style.display = (dest === 'cliente') ? 'block' : 'none';
+}
+
+// ─── SYNC CLIENTE ────────────────────────────────────────────
+function syncCliente() {
+  const sel    = document.getElementById('clienteSelect');
+  const custom = document.getElementById('clienteNomeCustom');
+  custom.style.display = (sel.value === 'outro') ? 'block' : 'none';
+  updatePreviews();
+}
+
+function getClienteNome() {
+  const dest = document.getElementById('destino').value;
+  if (dest === 'estoque') return '';
+  if (dest === 'interno') return document.getElementById('clienteNumero').value || 'Agricef';
+  const sel = document.getElementById('clienteSelect').value;
+  if (sel === 'outro') return document.getElementById('clienteNomeCustom').value.trim();
+  return sel;
+}
+
+// ─── VARIANTES F2 ────────────────────────────────────────────
+function toggleVariantes() {
+  const al  = document.getElementById('alongamento').checked;
+  const ex  = document.getElementById('extensao').checked;
+  const hint = document.getElementById('varianteHint');
+  hint.style.display = (al && ex) ? 'block' : 'none';
+  if (al && ex) document.getElementById('extensao').checked = false;
+}
+
+// ─── SCORE ───────────────────────────────────────────────────
+function calcScore() {
+  const f = SCORE_MAP.impactoFinanceiro[document.getElementById('impactoFinanceiro').value] || 0;
+  const e = SCORE_MAP.alinhamento[document.getElementById('alinhamento').value] || 0;
+  const u = SCORE_MAP.urgencia[document.getElementById('urgencia').value] || 0;
+  const c = SCORE_MAP.complexidade[document.getElementById('complexidade').value] || 0;
+  const preview = document.getElementById('scorePreview');
+
+  if (!f || !e || !u || !c) {
+    preview.innerHTML = '<div style="color:var(--muted);font-size:13px;">Preencha os 4 pilares</div>';
+    return;
+  }
+
+  const score = f * 0.40 + e * 0.30 + u * 0.15 + c * 0.15;
+  let nivel, cor;
+  if      (score > 3.99) { nivel = 'P1 — Prioridade Máxima'; cor = '#f85149'; }
+  else if (score > 2.99) { nivel = 'P2 — Estratégico';       cor = '#d29922'; }
+  else if (score > 1.99) { nivel = 'P3 — Backlog Ativo';     cor = '#2ea043'; }
+  else                   { nivel = 'P4 — Revisão/Descarte';  cor = '#8b949e'; }
+
+  preview.innerHTML = `
+    <div class="score-val" style="color:${cor}">${score.toFixed(2)}</div>
+    <div class="score-label" style="color:${cor}">${nivel}</div>
+    <div class="score-formula" style="margin-top:6px;">
+      F(${f})×0,40 + E(${e})×0,30 + U(${u})×0,15 + C(${c})×0,15
+    </div>`;
+}
+
+// ─── PREVIEW DE SUMMARY ──────────────────────────────────────
+function buildSummaryJS(fase) {
+  const dim    = document.getElementById('diametro').value;
+  const serial = document.getElementById('serial').value || 'S22000XXX';
+  const dest   = document.getElementById('destino').value;
+  const nome   = getClienteNome();
+  const num    = document.getElementById('clienteNumero') ?
+                 document.getElementById('clienteNumero').value : '';
+
+  if (!dim) return '';
+
+  let d;
+  if (dest === 'estoque') {
+    d = '(Estoque - ' + serial + ')';
+  } else if (dest === 'interno') {
+    d = '(' + (nome || 'Agricef') + ')';
+  } else {
+    d = '(' + serial + ') ' + nome + (num ? ' ' + num : '');
+  }
+
+  return 'P157 - CAMINHAO DE TUBOS HAULER ' + dim + '" - ' + d + ' - ' + fase;
+}
+
+// ─── GANTT PREVIEW ───────────────────────────────────────────
+function addDiasJS(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split('T')[0];
+}
+
+function fmtDate(s) {
+  if (!s) return '—';
+  const [y, m, d] = s.split('-');
+  return d + '/' + m + '/' + y;
+}
+
+function buildGantt() {
+  const fase       = document.getElementById('criarFases').value;
+  const startDate  = document.getElementById('startDate').value;
+  const diaC       = document.getElementById('diaC').value;
+  const alongamento = document.getElementById('alongamento').checked;
+  const extensao   = document.getElementById('extensao').checked;
+
+  const rows = [];
+
+  if (fase !== 'f2' && startDate) {
+    const s = startDate;
+    const d = (n) => addDiasJS(s, n);
+    rows.push({ fase:'F1', nome:'Preparação e Plan.',  start:s,    end:d(7)  });
+    rows.push({ fase:'F1', nome:'Compras',             start:d(7), end:d(35) });
+    rows.push({ fase:'F1', nome:'Fabricação (Osti)',   start:d(7), end:d(49) });
+    rows.push({ fase:'F1', nome:'Fabricação (Agricef)',start:d(7), end:d(49) });
+    rows.push({ fase:'F1', nome:'Pré – Montagem',      start:d(49),end:d(63) });
+  }
+
+  if (fase !== 'f1' && diaC) {
+    const s = diaC;
+    const d = (n) => addDiasJS(s, n);
+    if (alongamento) {
+      rows.push({ fase:'F2', nome:'Alongamento Osti', start:s,    end:d(14) });
+      rows.push({ fase:'F2', nome:'Montagens Osti',   start:d(14),end:d(35) });
+      rows.push({ fase:'F2', nome:'Montagens',        start:d(35),end:d(49) });
+      rows.push({ fase:'F2', nome:'Montagens 2',      start:d(49),end:d(56) });
+      rows.push({ fase:'F2', nome:'Testes',           start:d(56),end:d(63) });
+    } else if (extensao) {
+      rows.push({ fase:'F2', nome:'Fabricação Extensão', start:s,    end:d(14) });
+      rows.push({ fase:'F2', nome:'Montagens Osti',      start:d(14),end:d(35) });
+      rows.push({ fase:'F2', nome:'Montagens',           start:d(35),end:d(49) });
+      rows.push({ fase:'F2', nome:'Testes',              start:d(49),end:d(56) });
+    } else {
+      rows.push({ fase:'F2', nome:'Montagens Osti', start:s,    end:d(21) });
+      rows.push({ fase:'F2', nome:'Montagens',      start:d(21),end:d(35) });
+      rows.push({ fase:'F2', nome:'Testes',         start:d(35),end:d(42) });
+    }
+  }
+
+  if (!rows.length) {
+    return '<tr><td colspan="3" style="color:var(--muted);padding:10px;font-size:12px;">Preencha as datas para ver o cronograma estimado…</td></tr>';
+  }
+
+  // Calcular escala visual
+  const allDates = rows.flatMap(r => [r.start, r.end]).filter(Boolean);
+  const minDate  = allDates.reduce((a,b) => a < b ? a : b);
+  const maxDate  = allDates.reduce((a,b) => a > b ? a : b);
+  const totalDays = Math.max(1, (new Date(maxDate) - new Date(minDate)) / 86400000);
+  const MAX_W = 260;
+
+  return rows.map(r => {
+    const off  = (new Date(r.start) - new Date(minDate)) / 86400000;
+    const dur  = (new Date(r.end)   - new Date(r.start)) / 86400000;
+    const left = Math.round((off / totalDays) * MAX_W);
+    const w    = Math.max(4, Math.round((dur / totalDays) * MAX_W));
+    const cls  = r.fase === 'F1' ? 'badge-f1' : 'badge-f2';
+    return `<tr>
+      <td class="ph-name">${r.nome}</td>
+      <td class="ph-bar" style="min-width:${MAX_W+10}px;">
+        <div style="padding-left:${left}px;">
+          <div class="bar-inner" style="width:${w}px;${r.fase==='F2'?'background:var(--warn);':''}"></div>
+          <div class="bar-label">${fmtDate(r.start)} → ${fmtDate(r.end)} (${dur}d)</div>
+        </div>
+      </td>
+      <td class="ph-badge ${cls}">${r.fase}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── UPDATE ALL PREVIEWS ─────────────────────────────────────
+function updatePreviews() {
+  calcScore();
+
+  const fase = document.getElementById('criarFases').value;
+
+  // Summary F1
+  const s1 = buildSummaryJS('F1');
+  const el1 = document.getElementById('prevSummaryF1');
+  if (s1) { el1.textContent = s1; el1.classList.remove('dim'); }
+  else    { el1.textContent = 'Preencha produto e identificação acima…'; el1.classList.add('dim'); }
+
+  // Summary F2
+  const s2 = buildSummaryJS('F2');
+  const el2 = document.getElementById('prevSummaryF2');
+  document.getElementById('prevF2Block').style.display = (fase === 'f1') ? 'none' : 'block';
+  if (s2) { el2.textContent = s2; el2.classList.remove('dim'); }
+  else    { el2.textContent = '—'; el2.classList.add('dim'); }
+
+  // Gantt
+  document.getElementById('ganttBody').innerHTML = buildGantt();
+}
+
+// ─── SUGERIR SERIAL ─────────────────────────────────────────
+function sugerirSerial() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ Buscando…';
+  google.script.run
+    .withSuccessHandler(function(serial) {
+      document.getElementById('serial').value = serial;
+      btn.disabled = false;
+      btn.textContent = '⟳ Sugerir próximo';
+      updatePreviews();
+    })
+    .withFailureHandler(function() {
+      btn.disabled = false;
+      btn.textContent = '⟳ Sugerir próximo';
+    })
+    .buscarProximoSerial();
+}
+
+// ─── SUBMIT ─────────────────────────────────────────────────
+function submitForm(e) {
+  e.preventDefault();
+
+  // Validação extra
+  const al = document.getElementById('alongamento').checked;
+  const ex = document.getElementById('extensao').checked;
+  if (al && ex) { alert('Selecione apenas uma variante (alongamento OU extensão).'); return; }
+
+  const fase = document.getElementById('criarFases').value;
+  const diaC = document.getElementById('diaC').value;
+  if (fase !== 'f1' && !diaC) {
+    alert('Informe o DIA C (chegada do caminhão) para criar a F2.');
+    return;
+  }
+
+  const btn  = document.getElementById('btnSubmit');
+  const hint = document.getElementById('submitHint');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Criando no Jira…';
+  hint.textContent = 'Isso pode levar alguns segundos…';
+
+  const dados = {
+    diametro:            document.getElementById('diametro').value,
+    destino:             document.getElementById('destino').value,
+    clienteNome:         getClienteNome(),
+    clienteNumero:       (document.getElementById('clienteNumero') || {}).value || '',
+    serial:              document.getElementById('serial').value,
+    startDate:           document.getElementById('startDate').value,
+    diaC:                diaC,
+    baselineDate:        document.getElementById('baselineDate').value ||
+                         (document.getElementById('startDate').value ?
+                          addDiasJS(document.getElementById('startDate').value, 100) : ''),
+    alvoDate:            document.getElementById('alvoDate').value,
+    criarFases:          fase,
+    alongamento:         al,
+    extensao:            ex,
+    fabricacaoCarroceria: document.getElementById('fabricacaoCarroceria').value,
+    classificacao:       document.getElementById('classificacao').value,
+    impactoFinanceiro:   document.getElementById('impactoFinanceiro').value,
+    alinhamento:         document.getElementById('alinhamento').value,
+    urgencia:            document.getElementById('urgencia').value,
+    complexidade:        document.getElementById('complexidade').value,
+  };
+
+  google.script.run
+    .withSuccessHandler(onSuccess)
+    .withFailureHandler(onError)
+    .criarHaulerJira(dados);
+}
+
+function onSuccess(res) {
+  const btn  = document.getElementById('btnSubmit');
+  const hint = document.getElementById('submitHint');
+  btn.disabled = false;
+  btn.textContent = 'Criar projeto no Jira';
+  hint.textContent = '';
+
+  const modal = document.getElementById('modal');
+  const overlay = document.getElementById('modalOverlay');
+
+  if (res && res.success) {
+    modal.className = 'modal success';
+    document.getElementById('modalTitle').textContent = '✅ Projeto criado com sucesso!';
+
+    const ch = res.resultado.chaves;
+    let msg = 'Tarefas criadas no Jira:';
+    document.getElementById('modalMsg').textContent = msg;
+
+    const links = document.getElementById('modalLinks');
+    links.innerHTML = '';
+
+    if (ch.f1) {
+      links.innerHTML += `<a href="${ch.f1_url}" target="_blank">🔗 ${ch.f1} — F1 (${ch.f1_subtasks ? ch.f1_subtasks.length : 0} subtarefas)</a>`;
+    }
+    if (ch.f2) {
+      links.innerHTML += `<a href="${ch.f2_url}" target="_blank">🔗 ${ch.f2} — F2 (${ch.f2_subtasks ? ch.f2_subtasks.length : 0} subtarefas)</a>`;
+    }
+
+  } else {
+    modal.className = 'modal error';
+    document.getElementById('modalTitle').textContent = '❌ Erro ao criar projeto';
+    document.getElementById('modalMsg').textContent = (res && res.erro) || 'Erro desconhecido.';
+    document.getElementById('modalLinks').innerHTML = '';
+  }
+
+  overlay.classList.add('show');
+}
+
+function onError(err) {
+  const btn  = document.getElementById('btnSubmit');
+  const hint = document.getElementById('submitHint');
+  btn.disabled = false;
+  btn.textContent = 'Criar projeto no Jira';
+  hint.textContent = '';
+
+  const modal = document.getElementById('modal');
+  modal.className = 'modal error';
+  document.getElementById('modalTitle').textContent = '❌ Falha na comunicação';
+  document.getElementById('modalMsg').textContent = String(err);
+  document.getElementById('modalLinks').innerHTML = '';
+  document.getElementById('modalOverlay').classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('show');
+}
+</script>
+</body>
+</html>

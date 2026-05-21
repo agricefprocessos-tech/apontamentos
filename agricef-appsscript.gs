@@ -57,6 +57,9 @@ const OPERACOES = {
 function doGet(e) {
   const action = e.parameter.action || '';
 
+  // ── Módulo 2: Formulário de Inclusão de Projetos PCP ──────────────
+  if (action === 'pcp') return servirFormularioPCP_();
+
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'getCadastros')     return getCadastros();
