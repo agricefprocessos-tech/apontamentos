@@ -611,7 +611,7 @@ input[type="date"]{color-scheme:dark;}
     <div class="kpi" style="--kc:#f87171"><div class="kpi-lbl">Horas Ausência</div><div class="kpi-val" id="k9">—</div><div class="kpi-sub">8h × dias sem apont.</div><div class="kpi-ico">📅</div></div>
     <div class="kpi kpi-extra" style="--kc:#67e8f9" id="kpi-oee"><div class="kpi-lbl">OEE</div><div class="kpi-val" id="k-oee">—</div><div class="kpi-sub">Disponib. × Perf. × Qual.</div><div class="kpi-ico">🏭</div></div>
     <div class="kpi kpi-extra" style="--kc:#86efac" id="kpi-taxa-ret"><div class="kpi-lbl">Taxa Retrabalho</div><div class="kpi-val" id="k-taxa-ret">—</div><div class="kpi-sub">% ops com retrabalho</div><div class="kpi-ico">🔄</div></div>
-    <div class="kpi kpi-extra" style="--kc:#fca5a5" id="kpi-backlog"><div class="kpi-lbl">Backlog Aberto</div><div class="kpi-val" id="k-backlog">—</div><div class="kpi-sub">Aberturas s/ fechamento</div><div class="kpi-ico">⏳</div></div>
+    <div class="kpi kpi-extra" style="--kc:#fca5a5" id="kpi-backlog"><div class="kpi-lbl">Backlog Aberto</div><div class="kpi-val" id="k-backlog">—</div><div class="kpi-sub">Aberturas s/ fechamento · todos os períodos</div><div class="kpi-ico">⏳</div></div>
     <div class="kpi kpi-extra" style="--kc:#c084fc" id="kpi-custo"><div class="kpi-lbl">Improdutividade</div><div class="kpi-val" id="k-custo">—</div><div class="kpi-sub">% horas não produtivas</div><div class="kpi-ico">💸</div></div>
     <div class="kpi kpi-extra" style="--kc:#22d3ee" id="kpi-wip"><div class="kpi-lbl">WIP Médio</div><div class="kpi-val" id="k-wip">—</div><div class="kpi-sub">Ordens em paralelo (Lei de Little)</div><div class="kpi-ico">🔄</div></div>
     <div class="kpi kpi-extra" style="--kc:#fb923c" id="kpi-throughput"><div class="kpi-lbl">Throughput Médio</div><div class="kpi-val" id="k-throughput">—</div><div class="kpi-sub">Operações fechadas/mês</div><div class="kpi-ico">🚀</div></div>
@@ -3476,6 +3476,18 @@ function renderProjects(){
 
 let _computedBacklog = [];
 
+// ── Sincronização de paineis dependentes ─────────────────────────────────────
+// Sempre que RAW_DATA for modificado (abertura ou fechamento registrado),
+// chame syncPanels() para atualizar em cascata todos os paineis que dependem
+// do estado de backlog. Nunca atualize um painel isoladamente.
+function syncPanels(){
+  safeRender(renderKPIs,       'renderKPIs');       // KPI "Backlog Aberto" + contadores
+  safeRender(renderBacklog,    'renderBacklog');     // tabela de ordens em aberto
+  safeRender(renderAudit3,     'renderAudit3');      // aba Inconsistências
+  safeRender(renderAlerts,     'renderAlerts');      // cards de alertas
+  safeRender(showAlertBanner,  'showAlertBanner');   // banner vermelho/amarelo no topo
+}
+
 // ── Motor de pareamento two-pass (fonte de verdade canônica) ─────────────────
 // Retorna { openOrders, orphanFechamentos }
 // openOrders      = ABERTURAs sem FECHAMENTO correspondente
@@ -3657,9 +3669,8 @@ async function confirmarFechamento(){
     setTimeout(()=>{
       errEl.style.color='';
       fecharModal();
-      renderBacklog(); // recalcula: item já some pois o fechamento está no RAW_DATA
-      renderKPIs();    // atualiza contador de abertos/fechados
-    },900); // reduzido para resposta mais rápida
+      syncPanels(); // atualiza backlog + KPIs + inconsistências + alertas em cascata
+    },900);
   } catch(err){
     errEl.textContent='Erro: '+err.message;
     btnOk.disabled=false;
@@ -3756,12 +3767,30 @@ async function confirmarAberturaRetroativa(){
     const resp = await fetch(url);
     const json = await resp.json();
     if(!json.success) throw new Error(json.message || 'Erro desconhecido');
+
+    // ── Atualização otimista ──────────────────────────────────────────────────
+    // Injeta a ABERTURA no RAW_DATA para que o par abertura↔fechamento seja
+    // reconhecido imediatamente, removendo o item das inconsistências.
+    RAW_DATA.push({
+      ts   : carimbo.replace(/(\d{2})\/(\d{2})\/(\d{4}) /,'$3/$2/$1 '), // yyyy/MM/dd HH:mm:ss
+      func : r.func,
+      tipo : 'ABERTURA',
+      op   : r.op   || '',
+      serie: r.serie || '',
+      impl : r.impl  || '',
+      client: r.client || '',
+      item : r.item  || '',
+      qty  : r.qty   || '',
+      obs  : obs,
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     errEl.style.color = 'var(--accent3)';
     errEl.textContent = '✔ Abertura registrada com sucesso!';
     setTimeout(()=>{
       fecharModalAbertura();
-      renderAudit3(); // recarrega inconsistências
-    }, 1800);
+      syncPanels(); // atualiza backlog + KPIs + inconsistências + alertas em cascata
+    }, 900);
   } catch(err){
     errEl.textContent = 'Erro: ' + err.message;
     btnOk.disabled = false;
@@ -4009,22 +4038,21 @@ function renderAudit3() {
 
   const issues = [];
 
-  // 1. ABERTURAs sem FECHAMENTO — usa motor two-pass (mesma lógica do backlog)
-  // para garantir contagem idêntica ao painel de ordens abertas.
-  const { openOrders: _openOrds, orphanFechamentos: _orphanFechs } = computePairingTruth();
-  const openOrdKeys = new Set(_openOrds.map(r => r.func+'||'+r.ts));
-  // Só reporta ABERTURAs dentro do intervalo filtrado
-  filtered.filter(r=>r.tipo==='ABERTURA').forEach(r=>{
-    const key = r.func+'||'+r.ts;
-    if(openOrdKeys.has(key)){
-      const name = funcName(r.func);
-      const dt = tsToDate(r.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-      issues.push({ type:'backlog', sev:'alta', icon:'🔴',
-        desc:'Abertura sem fechamento correspondente',
-        detail:`${name} | ${r.op||'—'} | Item: ${r.item||'—'} | Série: ${r.serie&&r.serie[0]>='0'?r.serie:'—'} | ${dt}`,
-        raw: r });
-    }
+  // 1. ABERTURAs sem FECHAMENTO — usa computeOpenOrders() sobre TODO o RAW_DATA
+  // (mesmo escopo do KPI "Backlog Aberto" e do painel de ordens abertas),
+  // garantindo que os números sejam idênticos independente do filtro de período.
+  const _openOrds = computeOpenOrders(); // opera sobre RAW_DATA completo, sem filtro
+  _openOrds.forEach(r => {
+    const name = funcName(r.func);
+    const dt = tsToDate(r.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    issues.push({ type:'backlog', sev:'alta', icon:'🔴',
+      desc:'Abertura sem fechamento correspondente',
+      detail:`${name} | ${r.op||'—'} | Item: ${r.item||'—'} | Série: ${r.serie&&r.serie[0]>='0'?r.serie:'—'} | ${dt}`,
+      raw: r });
   });
+
+  // Orphan fechamentos: ainda usa computePairingTruth para detectar fechamentos sem abertura
+  const { orphanFechamentos: _orphanFechs } = computePairingTruth();
 
   // 2. Duração > 10h ou < 1min
   const allPairs = [
@@ -4108,8 +4136,8 @@ function renderAudit3() {
   } else {
     // Group by type
     const groups = {
-      backlog:    { label: '🔴 Aberturas sem Fechamento',           items: [] },
-      orphan:     { label: '🟡 Fechamentos sem Abertura',           items: [] },
+      backlog:    { label: '🔴 Aberturas sem Fechamento (todos os períodos)',  items: [] },
+      orphan:     { label: '🟠 Fechamentos sem Abertura (período filtrado)', items: [] },
       duracao:    { label: '🟠 Durações Suspeitas (>10h ou <1min)', items: [] },
       simultaneo: { label: '🟠 Apontamentos Simultâneos',           items: [] },
     };
