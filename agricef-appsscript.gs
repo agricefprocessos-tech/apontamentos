@@ -76,6 +76,14 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'normalizarOperadores' && e.parameter.key === 'AGF2026') {
+    try {
+      const total = normalizarCodigosOperador();
+      return jsonResponse({ success: true, message: total + ' código(s) normalizado(s) com sucesso.' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
 
   // Ações via payload GET (contorna CORS)
   if (e.parameter.payload) {
@@ -185,6 +193,15 @@ function gravarApontamento(payload) {
     // dentro do lock, para bloquear dupla abertura com segurança.
     // ---------------------------------------------------------------
     const tiposAbertura = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
+
+    // Mapeamento: tipo de fechamento → tipo de abertura esperado na aba Abertos
+    const TIPO_COMPATIVEL = {
+      'FECHAMENTO':         'ABERTURA',
+      'TERMINO_RETRABALHO': 'INÍCIO DE RETRABALHO',
+      'TERMINO_PARADA':     'INÍCIO DE PARADA',
+    };
+    const tiposFechamento = Object.keys(TIPO_COMPATIVEL);
+
     if (tiposAbertura.includes(tipo)) {
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue; // linha vazia
@@ -204,6 +221,35 @@ function gravarApontamento(payload) {
               cliente:      dadosAbertos[i][9] || '',
             }
           });
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // VALIDAÇÃO DE COMPATIBILIDADE DE TIPO — garante que o fechamento
+    // corresponde exatamente ao tipo de abertura em aberto.
+    // Ex.: TERMINO_PARADA só pode fechar INÍCIO DE PARADA.
+    // ---------------------------------------------------------------
+    if (tiposFechamento.includes(tipo)) {
+      const abertoIdPayload = String(payload.abertoId || '').trim();
+      for (let i = 1; i < dadosAbertos.length; i++) {
+        if (!dadosAbertos[i][0]) continue;
+        const rowId   = String(dadosAbertos[i][12] || '').trim();
+        const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
+        const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
+        if (matchId || matchOp) {
+          const tipoAberto     = String(dadosAbertos[i][2] || '').trim();
+          const tipoEsperado   = TIPO_COMPATIVEL[tipo];
+          if (tipoEsperado && tipoAberto !== tipoEsperado) {
+            return jsonResponse({
+              success: false,
+              message: 'Tipo de fechamento incompatível. Você possui "' + tipoAberto +
+                       '" em aberto, mas tentou registrar "' + (TIPOS_APONTAMENTO[tipo] || tipo) + '".',
+              incompativel: true,
+              tipoAberto: tipoAberto,
+            });
+          }
+          break; // encontrou o registro — compatível → pode continuar
         }
       }
     }
@@ -366,7 +412,7 @@ function gravarApontamento(payload) {
 // abertoId: ID único gerado na abertura (AP-...) — usado para identificar a linha exata no fechamento
 // dadosAbertos: resultado de getDataRange().getValues() já lido pelo caller — evita releitura
 function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId) {
-  const operador   = payload.operador  || '';
+  const operador   = normalizarCodigoOp(payload.operador || ''); // sempre 6 dígitos
   const implemento = payload.nrSerie   || payload.implemento || '';
   const dados      = dadosAbertos;
 
@@ -436,7 +482,7 @@ function getCadastros() {
 
     const operadores = abaOp.getDataRange().getValues().slice(1)
       .filter(r => String(r[2]).toUpperCase() !== 'NÃO' && r[0] !== '')
-      .map(r => ({ codigo: String(r[0]).trim(), nome: String(r[1]).trim() }));
+      .map(r => ({ codigo: normalizarCodigoOp(String(r[0]).trim()), nome: String(r[1]).trim() }));
 
     const series = abaSe.getDataRange().getValues().slice(1)
       .filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
@@ -458,15 +504,21 @@ function salvarOperador(payload) {
   try {
     const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
     const aba = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
+    // Garante que o código sempre é salvo com 6 dígitos (ex: "000130")
+    const codigoNorm = normalizarCodigoOp(String(payload.codigo || '').trim());
+    // Força formato texto na coluna A para preservar zeros à esquerda
+    aba.getRange('A:A').setNumberFormat('@');
     const dados = aba.getDataRange().getValues();
     for (let i = 1; i < dados.length; i++) {
-      if (String(dados[i][0]).trim() === String(payload.codigo).trim()) {
-        aba.getRange(i+1,2).setValue(payload.nome);
-        aba.getRange(i+1,3).setValue('Sim');
+      if (mesmoOperador(dados[i][0], codigoNorm)) {
+        aba.getRange(i+1, 1).setValue(codigoNorm); // corrige o código se estava sem zeros
+        aba.getRange(i+1, 2).setValue(payload.nome);
+        aba.getRange(i+1, 3).setValue('Sim');
+        invalidarCacheCadastros();
         return jsonResponse({ success: true, message: 'Operador atualizado.' });
       }
     }
-    aba.appendRow([payload.codigo, payload.nome, 'Sim']);
+    aba.appendRow([codigoNorm, payload.nome, 'Sim']);
     invalidarCacheCadastros();
     return jsonResponse({ success: true, message: 'Operador adicionado.' });
   } catch (err) { return jsonResponse({ success: false, message: err.message }); }
@@ -600,6 +652,18 @@ function mesmoOperador(a, b) {
   const na = Number(sa);
   const nb = Number(sb);
   return !isNaN(na) && na !== 0 && !isNaN(nb) && nb !== 0 && na === nb;
+}
+
+// Normaliza código de operador para sempre 6 dígitos com zeros à esquerda.
+// Se o valor da célula foi convertido pelo Sheets para número (ex: 130),
+// reconstitui o formato canônico "000130".
+function normalizarCodigoOp(val) {
+  const s = String(val === null || val === undefined ? '' : val).trim();
+  if (!s) return s;
+  const n = Number(s);
+  // só normaliza se for número puro positivo (sem letras, pontada ou traço)
+  if (!isNaN(n) && n > 0 && String(n) === s) return String(n).padStart(6, '0');
+  return s;
 }
 
 // ================================================================
@@ -808,6 +872,54 @@ function limparAbertos() {
   const removidos = Math.max(0, ultima - 1);
   if (removidos > 0) aba.deleteRows(2, removidos);
   Logger.log(removidos + ' registro(s) removido(s).');
+}
+
+// ================================================================
+// NORMALIZAÇÃO DE CÓDIGOS DE OPERADOR — Execute UMA VEZ
+// Corrige registros existentes em Abertos e Cadastro_Operadores
+// para garantir que todos os códigos têm 6 dígitos (ex: "000130").
+// Isso resolve divergências de backlog causadas pelo formato
+// "130" vs "000130" nas diferentes fontes de dados.
+// ================================================================
+function normalizarCodigosOperador() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  let totalCorrigidos = 0;
+
+  // 1. Cadastro_Operadores — coluna A
+  const abaOp = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
+  abaOp.getRange('A:A').setNumberFormat('@'); // força texto para preservar zeros
+  const dadosOp = abaOp.getDataRange().getValues();
+  for (let i = 1; i < dadosOp.length; i++) {
+    const codAtual  = String(dadosOp[i][0] || '').trim();
+    const codNorm   = normalizarCodigoOp(codAtual);
+    if (codAtual !== codNorm && codNorm) {
+      abaOp.getRange(i + 1, 1).setValue(codNorm);
+      totalCorrigidos++;
+      Logger.log('Operadores: linha ' + (i+1) + ': "' + codAtual + '" → "' + codNorm + '"');
+    }
+  }
+
+  // 2. Aba Abertos — coluna A (Operador)
+  const abaAb = ss.getSheetByName(ABA_ABERTOS);
+  if (abaAb) {
+    abaAb.getRange('A:A').setNumberFormat('@');
+    const dadosAb = abaAb.getDataRange().getValues();
+    for (let i = 1; i < dadosAb.length; i++) {
+      const codAtual = String(dadosAb[i][0] || '').trim();
+      const codNorm  = normalizarCodigoOp(codAtual);
+      if (codAtual !== codNorm && codNorm) {
+        abaAb.getRange(i + 1, 1).setValue(codNorm);
+        totalCorrigidos++;
+        Logger.log('Abertos: linha ' + (i+1) + ': "' + codAtual + '" → "' + codNorm + '"');
+      }
+    }
+  }
+
+  // 3. Invalida cache de cadastros para refletir as correções
+  invalidarCacheCadastros();
+
+  Logger.log('✅ Normalização concluída. ' + totalCorrigidos + ' código(s) corrigido(s).');
+  return totalCorrigidos;
 }
 
 function verificarEstrutura() {
@@ -1366,5 +1478,527 @@ function _rsParseData(val) {
   // Fallback genérico
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
+}
+
+// ================================================================
+//  RELATÓRIO DIÁRIO — AGRICEF
+//
+//  Enviado de segunda a sexta-feira às 06h45 (GMT-3).
+//  Foco operacional: onde agir hoje, quem conversar, gargalos.
+//
+//  Para ativar, execute UMA VEZ: criarTriggerRelatorioDiario()
+//  Para testar manualmente: execute enviarRelatorioDiario()
+// ================================================================
+
+// ---------------------------------------------------------------
+// PONTO DE ENTRADA
+// ---------------------------------------------------------------
+function enviarRelatorioDiario() {
+  try {
+    const rel = _rdMontarRelatorio();
+    _rdEnviarEmail(rel);
+    Logger.log('✅ Relatório diário enviado para ' + EMAIL_RELATORIO);
+  } catch (err) {
+    Logger.log('❌ Erro no relatório diário: ' + err.message + '\n' + err.stack);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------
+// CONFIGURAR TRIGGER DIÁRIO — executar UMA VEZ pelo Editor
+// ---------------------------------------------------------------
+function criarTriggerRelatorioDiario() {
+  // Remove triggers duplicados
+  ScriptApp.getProjectTriggers()
+    .filter(function(t) { return t.getHandlerFunction() === 'enviarRelatorioDiario'; })
+    .forEach(function(t) { ScriptApp.deleteTrigger(t); });
+
+  // Segunda a sexta às 06h45 (dispara entre 06h e 07h — não tem minutos exatos no Apps Script)
+  var dias = [
+    ScriptApp.WeekDay.MONDAY,
+    ScriptApp.WeekDay.TUESDAY,
+    ScriptApp.WeekDay.WEDNESDAY,
+    ScriptApp.WeekDay.THURSDAY,
+    ScriptApp.WeekDay.FRIDAY,
+  ];
+  dias.forEach(function(dia) {
+    ScriptApp.newTrigger('enviarRelatorioDiario')
+      .timeBased()
+      .onWeekDay(dia)
+      .atHour(7)   // entre 07h e 08h; antes do relatório semanal de segunda
+      .create();
+  });
+
+  Logger.log('✅ Trigger diário criado: seg-sex às 07h (GMT-3).');
+}
+
+// ---------------------------------------------------------------
+// MONTAR RELATÓRIO DIÁRIO
+// ---------------------------------------------------------------
+function _rdMontarRelatorio() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) throw new Error('Aba "' + ABA_RESPOSTAS + '" não encontrada.');
+
+  const dados = aba.getDataRange().getValues();
+  const agora = new Date();
+
+  // Janelas temporais
+  const hoje      = new Date(agora); hoje.setHours(0,0,0,0);
+  const ontem     = new Date(hoje);  ontem.setDate(hoje.getDate() - 1);
+  const hojeFim   = new Date(hoje);  hojeFim.setHours(23,59,59,999);
+  const ontemFim  = new Date(ontem); ontemFim.setHours(23,59,59,999);
+  // "Esta semana" = últimos 7 dias para tendência rápida
+  const semanaIni = new Date(hoje);  semanaIni.setDate(hoje.getDate() - 7);
+
+  // --- Parse linhas (todos os tipos relevantes) ---
+  const linhas = [];
+  for (var i = 1; i < dados.length; i++) {
+    var r = dados[i];
+    if (!r[0] || !r[2]) continue;
+    var ts = _rsParseData(r[0]);
+    if (!ts) continue;
+    var tipoRaw = String(r[2]).toUpperCase();
+    var tipo = null;
+    if      (tipoRaw.includes('ABERTURA') && !tipoRaw.includes('RETRABALHO')) tipo = 'ABERTURA';
+    else if (tipoRaw.includes('FECHAMENTO'))                                   tipo = 'FECHAMENTO';
+    else if (tipoRaw.includes('INÍCIO DE PARADA'))                             tipo = 'PARADA_INI';
+    else if (tipoRaw.includes('INÍCIO DE RETRABALHO'))                         tipo = 'RETRAB_INI';
+    else if (tipoRaw.includes('TÉRMINO DE RETRABALHO'))                        tipo = 'RETRAB_FIM';
+    else continue;
+
+    var campoF = String(r[5] || '');
+    var pts    = campoF.split('|').map(function(x){ return x.trim(); });
+    linhas.push({
+      ts,
+      tipo,
+      func:  String(r[1] || '').trim(),
+      op:    String(r[3] || '').trim(),
+      item:  String(r[4] || '').trim(),
+      serie: pts[0] || '',
+      impl:  pts[1] || '',
+      qty:   Number(r[6])  || 0,
+    });
+  }
+
+  // --- Pareamento ABERTURA ↔ FECHAMENTO (two-pass greedy) ---
+  var aberturas = linhas
+    .filter(function(r){ return r.tipo === 'ABERTURA'; })
+    .map(function(r){ return Object.assign({}, r, { _used: false, _fechTs: null, _leadMs: 0 }); });
+
+  linhas
+    .filter(function(r){ return r.tipo === 'FECHAMENTO'; })
+    .forEach(function(fech) {
+      var melhor = null, melhorScore = -1;
+      for (var i = 0; i < aberturas.length; i++) {
+        var a = aberturas[i];
+        if (a._used || a.func !== fech.func || a.ts > fech.ts) continue;
+        var score = 1;
+        if (a.op    === fech.op)    score += 4;
+        if (a.serie === fech.serie) score += 2;
+        if (a.item  === fech.item)  score += 1;
+        if (score > melhorScore) { melhorScore = score; melhor = i; }
+      }
+      if (melhor !== null) {
+        aberturas[melhor]._used   = true;
+        aberturas[melhor]._fechTs = fech.ts;
+        aberturas[melhor]._leadMs = fech.ts - aberturas[melhor].ts;
+      }
+    });
+
+  var backlog   = aberturas.filter(function(a){ return !a._used; })
+                            .sort(function(x, y){ return x.ts - y.ts; }); // mais antigas primeiro
+  var fechadas  = aberturas.filter(function(a){ return a._used; });
+
+  // --- Aberturas e fechamentos HOJE e ONTEM ---
+  var aberturasHoje  = linhas.filter(function(r){ return r.tipo==='ABERTURA' && r.ts >= hoje && r.ts <= hojeFim; });
+  var fechamentosHoje= fechadas.filter(function(r){ return r._fechTs >= hoje && r._fechTs <= hojeFim; });
+  var aberturasOntem = linhas.filter(function(r){ return r.tipo==='ABERTURA' && r.ts >= ontem && r.ts <= ontemFim; });
+  var fechamentosOntem=fechadas.filter(function(r){ return r._fechTs >= ontem && r._fechTs <= ontemFim; });
+
+  // Prefere ontem se hoje não tem dados ainda (relatório às 07h)
+  var refDiaLabel = aberturasHoje.length > 0 || fechamentosHoje.length > 0 ? 'Hoje' : 'Ontem';
+  var refAberturas = refDiaLabel === 'Hoje' ? aberturasHoje  : aberturasOntem;
+  var refFechados  = refDiaLabel === 'Hoje' ? fechamentosHoje : fechamentosOntem;
+
+  // --- Backlog por operador (quem conversar) ---
+  var backlogPorOp = {};
+  backlog.forEach(function(o){
+    var nome = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
+    if (!backlogPorOp[nome]) backlogPorOp[nome] = { count: 0, ordens: [], nome: nome };
+    backlogPorOp[nome].count++;
+    backlogPorOp[nome].ordens.push(o);
+  });
+  var topBacklogOp = Object.values(backlogPorOp)
+    .sort(function(a,b){ return b.count - a.count; })
+    .slice(0, 5);
+
+  // --- Ordens mais antigas em aberto ---
+  var ordensAntigas = backlog.slice(0, 8);
+
+  // --- Backlog por operação (gargalos) ---
+  var backlogPorOperacao = {};
+  backlog.forEach(function(o){
+    var op = o.op || '(sem operação)';
+    backlogPorOperacao[op] = (backlogPorOperacao[op] || 0) + 1;
+  });
+  var topGargalos = Object.entries(backlogPorOperacao)
+    .sort(function(a,b){ return b[1]-a[1]; })
+    .slice(0, 3);
+
+  // --- Backlog por série (foco em produto) ---
+  var backlogPorSerie = {};
+  backlog.forEach(function(o){
+    if (!o.serie) return;
+    if (!backlogPorSerie[o.serie]) backlogPorSerie[o.serie] = { count: 0, impl: o.impl || '' };
+    backlogPorSerie[o.serie].count++;
+  });
+  var topSeries = Object.entries(backlogPorSerie)
+    .sort(function(a,b){ return b[1].count-a[1].count; })
+    .slice(0, 5);
+
+  // --- Operadores sem atividade nos últimos 2 dias úteis ---
+  var dois_dias_atras = new Date(hoje); dois_dias_atras.setDate(hoje.getDate() - 2);
+  var ativosRecentes = new Set(
+    linhas.filter(function(r){ return r.ts >= dois_dias_atras; })
+          .map(function(r){ return r.func; })
+  );
+  var todosOps = new Set(linhas.map(function(r){ return r.func; }));
+  var semAtividade = [...todosOps].filter(function(f){ return !ativosRecentes.has(f); })
+    .map(function(f){ return f.includes(' - ') ? f.split(' - ').slice(1).join(' ') : f; })
+    .sort();
+
+  // --- Retrabalhos ativos ---
+  var retrabs = linhas.filter(function(r){ return r.tipo === 'RETRAB_INI'; });
+  var retrAbertos = retrabs.filter(function(ri){
+    return !linhas.some(function(rf){
+      return rf.tipo === 'RETRAB_FIM' && rf.func === ri.func && rf.ts > ri.ts;
+    });
+  });
+
+  // --- Alertas diários ---
+  var alertas = _rdAlertas(backlog, refFechados, refAberturas, topBacklogOp, ordensAntigas, agora);
+
+  // --- Ações recomendadas ---
+  var acoes = _rdAcoes(backlog, topBacklogOp, topGargalos, ordensAntigas, semAtividade, refFechados, retrAbertos);
+
+  return {
+    agora, hoje, refDiaLabel,
+    aberturasRef: refAberturas, fechadosRef: refFechados,
+    backlog, topBacklogOp, ordensAntigas, topGargalos, topSeries,
+    semAtividade, retrAbertos, alertas, acoes,
+  };
+}
+
+// ---------------------------------------------------------------
+// ALERTAS DIÁRIOS
+// ---------------------------------------------------------------
+function _rdAlertas(backlog, fechados, aberturas, topOps, antigas, agora) {
+  var lista = [];
+  var limiteMs = 3 * 86400000; // 3 dias
+
+  if (backlog.length >= 20) {
+    lista.push({ nivel: 'CRITICO', msg: 'Backlog crítico: ' + backlog.length + ' ordens em aberto. Intervenção imediata necessária.' });
+  } else if (backlog.length >= 10) {
+    lista.push({ nivel: 'ATENCAO', msg: 'Backlog elevado: ' + backlog.length + ' ordens em aberto. Monitorar e acelerar fechamentos.' });
+  }
+
+  var antigas3d = backlog.filter(function(o){ return (agora - o.ts) > limiteMs; });
+  if (antigas3d.length > 0) {
+    lista.push({ nivel: 'CRITICO', msg: antigas3d.length + ' ordem(ns) aberta(s) há mais de 3 dias. Investigar imediatamente.' });
+  }
+
+  if (fechados.length === 0 && aberturas.length === 0) {
+    lista.push({ nivel: 'ATENCAO', msg: 'Nenhum apontamento registrado no dia de referência. Verificar se operadores usaram o sistema.' });
+  }
+
+  if (topOps.length > 0 && topOps[0].count >= 5) {
+    lista.push({ nivel: 'ATENCAO', msg: topOps[0].nome + ' acumula ' + topOps[0].count + ' ordens em aberto — conversa prioritária hoje.' });
+  }
+
+  return lista;
+}
+
+// ---------------------------------------------------------------
+// AÇÕES RECOMENDADAS PARA O DIA
+// ---------------------------------------------------------------
+function _rdAcoes(backlog, topOps, topGargalos, antigas, semAtividade, fechados, retrabs) {
+  var lista = [];
+  var limiteMs = 3 * 86400000;
+  var agora = new Date();
+
+  // 1. Conversar com operadores com mais backlog
+  if (topOps.length > 0) {
+    var nomes = topOps.slice(0, 3).map(function(o){ return o.nome + ' (' + o.count + ')'; }).join(', ');
+    lista.push('💬 <b>Conversar hoje com:</b> ' + nomes + ' — entender o que impede o fechamento das ordens em aberto.');
+  }
+
+  // 2. Ordens mais antigas
+  var antigas3d = backlog.filter(function(o){ return (agora - o.ts) > limiteMs; });
+  if (antigas3d.length > 0) {
+    var seriesAntigas = [...new Set(antigas3d.map(function(o){ return o.serie; }).filter(Boolean))].slice(0,3).join(', ');
+    lista.push('🔴 <b>Prioridade máxima:</b> ' + antigas3d.length + ' ordem(ns) com mais de 3 dias em aberto.'
+      + (seriesAntigas ? ' Séries: ' + seriesAntigas + '.' : '')
+      + ' Verificar se há impedimento de material, máquina ou informação.');
+  }
+
+  // 3. Gargalo de operação
+  if (topGargalos.length > 0 && topGargalos[0][1] >= 3) {
+    lista.push('🔧 <b>Gargalo detectado:</b> operação <i>' + topGargalos[0][0] + '</i> concentra ' + topGargalos[0][1]
+      + ' ordens do backlog. Avaliar reforço de equipe ou resequenciamento nesta etapa.');
+  }
+
+  // 4. Operadores sem atividade
+  if (semAtividade.length > 0 && semAtividade.length <= 5) {
+    lista.push('📋 <b>Sem apontamento nos últimos 2 dias:</b> ' + semAtividade.slice(0,4).join(', ')
+      + '. Verificar presença e garantir que os registros estão sendo feitos corretamente.');
+  } else if (semAtividade.length > 5) {
+    lista.push('📋 <b>' + semAtividade.length + ' operadores</b> sem apontamento nos últimos 2 dias. Verificar aderência ao sistema de apontamento.');
+  }
+
+  // 5. Retrabalhos em aberto
+  if (retrabs.length > 0) {
+    var opRetrabs = [...new Set(retrabs.map(function(r){ return r.func.includes(' - ') ? r.func.split(' - ').slice(1).join(' ') : r.func; }))];
+    lista.push('🔄 <b>Retrabalho em andamento:</b> ' + opRetrabs.join(', ')
+      + '. Acompanhar conclusão e registrar término de retrabalho no sistema.');
+  }
+
+  // 6. Desempenho ontem/hoje
+  if (fechados.length >= 5) {
+    lista.push('✅ <b>Bom ritmo:</b> ' + fechados.length + ' fechamentos registrados. Manter a cadência e garantir novos apontamentos de abertura.');
+  } else if (fechados.length > 0) {
+    lista.push('📈 <b>Apenas ' + fechados.length + ' fechamento(s).</b> Estimular operadores a concluir e registrar as operações em andamento.');
+  }
+
+  if (lista.length === 0) {
+    lista.push('✅ Nenhum ponto crítico identificado para hoje. Manter cadência de apontamentos e foco na qualidade dos registros.');
+  }
+
+  return lista;
+}
+
+// ---------------------------------------------------------------
+// GERAÇÃO DO HTML DO EMAIL DIÁRIO
+// ---------------------------------------------------------------
+function _rdGerarHtml(rel) {
+  var { agora, refDiaLabel, aberturasRef, fechadosRef,
+        backlog, topBacklogOp, ordensAntigas, topGargalos, topSeries,
+        semAtividade, retrAbertos, alertas, acoes } = rel;
+
+  var fmt      = function(d){ return Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy'); };
+  var fmtHora  = function(d){ return Utilities.formatDate(d, 'GMT-3', 'HH:mm'); };
+  var dataEnvio= Utilities.formatDate(agora, 'GMT-3', "dd/MM/yyyy 'às' HH:mm");
+  var diaSemana= ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'][agora.getDay()];
+
+  // Cor do backlog
+  var corBacklog = backlog.length >= 20 ? '#f87171' : backlog.length >= 10 ? '#fb923c' : '#4ade80';
+
+  // ── HTML Alertas ──
+  var htmlAlertas = '';
+  if (alertas.length === 0) {
+    htmlAlertas = '<tr><td style="padding:10px 14px;color:#4ade80;font-size:13px;">✅ Sem alertas críticos para hoje.</td></tr>';
+  } else {
+    alertas.forEach(function(a) {
+      var cor = a.nivel === 'CRITICO' ? '#f87171' : '#fb923c';
+      var ico = a.nivel === 'CRITICO' ? '🔴' : '🟡';
+      htmlAlertas += '<tr><td style="padding:9px 14px;border-left:3px solid ' + cor + ';background:#1a2030;border-radius:0 4px 4px 0;font-size:13px;color:#e6edf3;margin-bottom:4px;">' + ico + ' ' + a.msg + '</td></tr>';
+    });
+  }
+
+  // ── HTML Ações ──
+  var htmlAcoes = '';
+  acoes.forEach(function(a) {
+    htmlAcoes += '<tr><td style="padding:9px 16px;font-size:13px;color:#e6edf3;border-bottom:1px solid #252d40;line-height:1.55;">' + a + '</td></tr>';
+  });
+
+  // ── HTML KPIs cards ──
+  var card = function(cor, label, valor, sub) {
+    return '<td style="width:25%;padding:4px;">'
+      + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;border-top:3px solid ' + cor + ';">'
+      + '<tr><td style="padding:12px 10px;">'
+      + '<div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">' + label + '</div>'
+      + '<div style="font-size:28px;font-weight:900;color:' + cor + ';line-height:1;">' + valor + '</div>'
+      + '<div style="font-size:11px;color:#8b949e;margin-top:3px;">' + sub + '</div>'
+      + '</td></tr></table></td>';
+  };
+
+  var htmlCards = ''
+    + card('#fca5a5', 'BACKLOG TOTAL', backlog.length, 'ordens sem fechamento')
+    + card('#4ade80', refDiaLabel + ' — ENTREGAS', fechadosRef.length, 'ops concluídas')
+    + card('#38bdf8', refDiaLabel + ' — ENTRADAS', aberturasRef.length, 'novas aberturas')
+    + card('#fb923c', 'MAIS ANTIGO', ordensAntigas.length > 0
+        ? Math.floor((agora - ordensAntigas[0].ts) / 86400000) + 'd'
+        : '—',
+        ordensAntigas.length > 0 ? 'dias sem fechar' : 'tudo ok');
+
+  // ── HTML Quem conversar ──
+  var htmlConversas = '';
+  if (topBacklogOp.length === 0) {
+    htmlConversas = '<tr><td colspan="2" style="padding:12px;color:#4ade80;font-size:13px;text-align:center;">✅ Nenhum backlog pendente.</td></tr>';
+  } else {
+    topBacklogOp.forEach(function(op) {
+      var corQ = op.count >= 5 ? '#f87171' : op.count >= 3 ? '#fb923c' : '#8b949e';
+      var series = [...new Set(op.ordens.map(function(o){ return o.serie; }).filter(Boolean))].slice(0,3).join(', ');
+      htmlConversas += '<tr>'
+        + '<td style="padding:8px 10px;font-size:13px;color:#e6edf3;border-bottom:1px solid #252d40;">' + op.nome + '</td>'
+        + '<td style="padding:8px 10px;font-size:13px;font-weight:700;color:' + corQ + ';border-bottom:1px solid #252d40;text-align:center;">' + op.count + ' ordens</td>'
+        + '<td style="padding:8px 10px;font-size:11px;color:#8b949e;border-bottom:1px solid #252d40;">' + (series||'—') + '</td>'
+        + '</tr>';
+    });
+  }
+
+  // ── HTML Ordens Antigas ──
+  var htmlAntigas = '';
+  if (ordensAntigas.length === 0) {
+    htmlAntigas = '<tr><td colspan="4" style="padding:12px;color:#4ade80;font-size:13px;text-align:center;">✅ Nenhuma ordem com mais de 3 dias.</td></tr>';
+  } else {
+    ordensAntigas.forEach(function(o) {
+      var dias     = Math.floor((agora - o.ts) / 86400000);
+      var corDias  = dias >= 5 ? '#f87171' : dias >= 3 ? '#fb923c' : '#8b949e';
+      var nome     = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
+      htmlAntigas += '<tr>'
+        + '<td style="padding:6px 10px;font-size:11px;color:#8b949e;border-bottom:1px solid #252d40;">' + fmt(o.ts) + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;color:#e6edf3;border-bottom:1px solid #252d40;">' + nome + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;color:#38bdf8;border-bottom:1px solid #252d40;">' + (o.op||'—') + '</td>'
+        + '<td style="padding:6px 10px;font-size:12px;font-weight:700;color:' + corDias + ';border-bottom:1px solid #252d40;text-align:right;">' + dias + 'd</td>'
+        + '</tr>';
+    });
+  }
+
+  // ── HTML Gargalos ──
+  var htmlGargalos = '';
+  if (topGargalos.length === 0) {
+    htmlGargalos = '<tr><td colspan="2" style="padding:12px;color:#4ade80;font-size:13px;text-align:center;">Sem gargalos identificados.</td></tr>';
+  } else {
+    var maxG = topGargalos[0][1];
+    topGargalos.forEach(function(g, i) {
+      var pct = Math.max(8, Math.round(g[1] / maxG * 100));
+      var cor = i === 0 ? '#f87171' : '#fb923c';
+      htmlGargalos += '<tr>'
+        + '<td style="padding:8px 12px;font-size:12px;color:#e6edf3;border-bottom:1px solid #252d40;width:50%;">' + g[0] + '</td>'
+        + '<td style="padding:8px 12px;border-bottom:1px solid #252d40;">'
+        + '<div style="display:flex;align-items:center;gap:8px;">'
+        + '<div style="flex:1;height:10px;background:#252d40;border-radius:3px;overflow:hidden;">'
+        + '<div style="width:' + pct + '%;height:100%;background:' + cor + ';border-radius:3px;"></div></div>'
+        + '<span style="font-size:12px;font-weight:700;color:' + cor + ';min-width:24px;text-align:right;">' + g[1] + '</span>'
+        + '</div></td>'
+        + '</tr>';
+    });
+  }
+
+  // ── HTML Séries com Backlog ──
+  var htmlSeries = '';
+  if (topSeries.length === 0) {
+    htmlSeries = '<tr><td colspan="3" style="padding:12px;color:#4ade80;font-size:13px;text-align:center;">Sem backlog por série.</td></tr>';
+  } else {
+    topSeries.forEach(function(entry) {
+      var s = entry[0], v = entry[1];
+      htmlSeries += '<tr>'
+        + '<td style="padding:7px 10px;font-size:13px;font-weight:700;color:#38bdf8;border-bottom:1px solid #252d40;">' + s + '</td>'
+        + '<td style="padding:7px 10px;font-size:12px;color:#8b949e;border-bottom:1px solid #252d40;">' + (v.impl||'—') + '</td>'
+        + '<td style="padding:7px 10px;font-size:12px;font-weight:700;color:#fca5a5;border-bottom:1px solid #252d40;text-align:right;">' + v.count + ' abertas</td>'
+        + '</tr>';
+    });
+  }
+
+  // ── MONTAGEM FINAL ──
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head>'
+    + '<body style="margin:0;padding:0;background:#0a0e17;font-family:Arial,Helvetica,sans-serif;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0e17;padding:24px 12px;">'
+    + '<tr><td align="center">'
+    + '<table width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%;">'
+
+    // CABEÇALHO
+    + '<tr><td style="background:#0d1117;border-bottom:3px solid #38bdf8;padding:20px 28px;border-radius:12px 12px 0 0;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+    + '<td><div style="font-size:26px;font-weight:900;color:#f0b429;letter-spacing:3px;line-height:1;">AGRICEF</div>'
+    + '<div style="font-size:11px;color:#58677a;letter-spacing:2px;margin-top:3px;text-transform:uppercase;">Relatório Operacional Diário</div></td>'
+    + '<td align="right">'
+    + '<div style="font-size:15px;font-weight:700;color:#38bdf8;">🗓️ ' + diaSemana + ', ' + fmt(agora) + '</div>'
+    + '<div style="font-size:11px;color:#58677a;margin-top:3px;">Gerado às ' + fmtHora(agora) + ' (Brasília)</div>'
+    + '</td></tr></table></td></tr>'
+
+    // ALERTAS
+    + '<tr><td style="background:#111722;padding:16px 28px 4px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f87171;text-transform:uppercase;letter-spacing:1.5px;padding:0 0 8px;">🚨 Pontos Críticos de Hoje</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="3">' + htmlAlertas + '</table>'
+    + '</td></tr>'
+
+    // AÇÕES DO DIA
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">⚡ Ações para Hoje</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlAcoes + '</table>'
+    + '</td></tr>'
+
+    // KPI CARDS
+    + '<tr><td style="background:#111722;padding:4px 28px 12px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">📊 Situação do Dia</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>' + htmlCards + '</tr></table>'
+    + '</td></tr>'
+
+    // QUEM CONVERSAR
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#fb923c;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">💬 Com Quem Falar Hoje (Top Backlog por Operador)</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">'
+    + '<tr style="background:#141a28;">'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;border-bottom:1px solid #252d40;">OPERADOR</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:center;border-bottom:1px solid #252d40;">BACKLOG</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;border-bottom:1px solid #252d40;">SÉRIES</th>'
+    + '</tr>'
+    + htmlConversas
+    + '</table></td></tr>'
+
+    // ORDENS MAIS ANTIGAS
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#f87171;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">⏰ Ordens Mais Antigas em Aberto</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">'
+    + '<tr style="background:#141a28;">'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;border-bottom:1px solid #252d40;">ABERTURA</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;border-bottom:1px solid #252d40;">OPERADOR</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:left;border-bottom:1px solid #252d40;">OPERAÇÃO</th>'
+    + '<th style="padding:8px 10px;font-size:11px;color:#8b949e;text-align:right;border-bottom:1px solid #252d40;">DIAS</th>'
+    + '</tr>'
+    + htmlAntigas
+    + '</table></td></tr>'
+
+    // GARGALOS + SÉRIES
+    + '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+    + '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+
+    + '<td style="width:50%;vertical-align:top;padding-right:8px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">🔧 Gargalos (Op. com Mais Backlog)</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlGargalos + '</table>'
+    + '</td>'
+
+    + '<td style="width:50%;vertical-align:top;padding-left:8px;">'
+    + '<div style="font-size:12px;font-weight:700;color:#67e8f9;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">📦 Séries com Mais Backlog</div>'
+    + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlSeries + '</table>'
+    + '</td>'
+
+    + '</tr></table></td></tr>'
+
+    // FOOTER
+    + '<tr><td style="background:#0d1117;padding:14px 28px;border-radius:0 0 12px 12px;border-top:1px solid #1c2230;text-align:center;">'
+    + '<div style="font-size:11px;color:#58677a;">Relatório gerado automaticamente de segunda a sexta às 07h (Brasília).</div>'
+    + '<div style="font-size:11px;color:#3a4460;margin-top:3px;">AGRICEF — Dashboard de Produção · Sistema de Apontamento v4 '
+    + '| <a href="https://agricefprocessos-tech.github.io/agricef-dashboard/" style="color:#38bdf8;text-decoration:none;">Abrir Dashboard</a></div>'
+    + '</td></tr>'
+
+    + '</table>'
+    + '</td></tr></table>'
+    + '</body></html>';
+}
+
+// ---------------------------------------------------------------
+// ENVIO DO EMAIL DIÁRIO
+// ---------------------------------------------------------------
+function _rdEnviarEmail(rel) {
+  var dataStr = Utilities.formatDate(rel.agora, 'GMT-3', 'dd/MM/yyyy');
+  var html = _rdGerarHtml(rel);
+  MailApp.sendEmail({
+    to:       EMAIL_RELATORIO,
+    subject:  '⚡ AGRICEF | Relatório Diário — ' + dataStr,
+    htmlBody: html,
+  });
 }
 

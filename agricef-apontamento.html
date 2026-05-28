@@ -1015,7 +1015,10 @@ async function verificarSaldoAPI(nrSerie, codItem, operacao) {
       esconder('alertaSaldoParcial');
       liberarQtdPlanejada();
     }
-  } catch { esconder('alertaSaldoParcial'); }
+  } catch {
+    esconder('alertaSaldoParcial');
+    liberarQtdPlanejada(); // libera campo caso estivesse bloqueado de chamada anterior
+  }
 }
 
 // Libera o campo qtdPlanejada (usado ao limpar ou quando não há saldo)
@@ -1103,6 +1106,11 @@ async function enviarApontamento() {
       showToast('Apontamento em aberto — feche antes de abrir novo','error');
       btn.disabled=false; btn.textContent='Registrar apontamento';
       // Volta para step1 para mostrar o alerta
+      voltarStep1();
+    } else if (data.incompativel) {
+      // Tipo de fechamento não corresponde ao tipo aberto
+      showToast('Tipo incompatível: ' + data.message, 'error');
+      btn.disabled=false; btn.textContent='Registrar apontamento';
       voltarStep1();
     } else {
       showToast('Erro: '+data.message,'error');
