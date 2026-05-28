@@ -556,7 +556,7 @@ function carimboBrowser() {
 
 // ===================== CADASTROS =====================
 const CACHE_KEY = 'agricef_cadastros';
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+const CACHE_TTL = 60 * 1000; // 1 minuto — curto para operações novas aparecerem rápido
 
 function salvarCacheLocal(operadores, series, operacoesCustom) {
   try {
@@ -1383,6 +1383,9 @@ function pinOk(){
     document.getElementById('adminLock').style.display='none';
     document.getElementById('adminContent').style.display='block';
     renderListaAdmin();
+    // Sempre busca dados frescos do servidor ao entrar no admin
+    // (garante que operações adicionadas em outro dispositivo apareçam)
+    carregarCadastros(true);
   } else { showToast('PIN incorreto','error'); pinBuffer=''; atualizarPinDisplay(); }
 }
 function switchTab(tab){
