@@ -85,6 +85,14 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'normalizarRespostas' && e.parameter.key === 'AGF2026') {
+    try {
+      const total = normalizarRespostasColB();
+      return jsonResponse({ success: true, message: total + ' registro(s) da aba Respostas normalizado(s).' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
 
   // Ações via payload GET (contorna CORS)
   if (e.parameter.payload) {
@@ -959,11 +967,66 @@ function normalizarCodigosOperador() {
     }
   }
 
-  // 3. Invalida cache de cadastros para refletir as correções
+  // 3. Aba Respostas — coluna B (NOME DO OPERADOR nos registros históricos)
+  totalCorrigidos += normalizarRespostasColB();
+
+  // 4. Invalida cache de cadastros para refletir as correções
   invalidarCacheCadastros();
 
   Logger.log('✅ Normalização concluída. ' + totalCorrigidos + ' código(s) corrigido(s).');
   return totalCorrigidos;
+}
+
+// ================================================================
+// NORMALIZAÇÃO DA ABA RESPOSTAS — coluna B (NOME DO OPERADOR)
+// Corrige entradas como "130 - NOME" ou "130 — NOME" para
+// "000130 - NOME" / "000130 — NOME" nos registros históricos.
+// Execute via: ?action=normalizarRespostas&key=AGF2026
+// ================================================================
+function normalizarRespostasColB() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) { Logger.log('Aba Respostas não encontrada.'); return 0; }
+  const lastRow = aba.getLastRow();
+  if (lastRow < 2) { Logger.log('Nenhum registro a normalizar.'); return 0; }
+
+  // Leitura em lote — coluna B (índice 2 na planilha, 0 no array)
+  const colB = aba.getRange(2, 2, lastRow - 1, 1).getValues();
+  let corrigidos = 0;
+
+  for (let i = 0; i < colB.length; i++) {
+    const val = String(colB[i][0] === null || colB[i][0] === undefined ? '' : colB[i][0]).trim();
+    if (!val) continue;
+
+    // Detecta separadores " - " (hífen) ou " — " (travessão) ou só dígitos
+    const mHifen = val.match(/^(\d+)\s*-\s*(.*)/s);
+    const mTravo = val.match(/^(\d+)\s*—\s*(.*)/s);
+    const mSo    = val.match(/^(\d+)$/);
+
+    let code, resto;
+    if      (mHifen) { code = mHifen[1]; resto = ' - ' + mHifen[2].trim(); }
+    else if (mTravo) { code = mTravo[1]; resto = ' — ' + mTravo[2].trim(); }
+    else if (mSo)    { code = mSo[1];   resto = ''; }
+    else continue; // não inicia com número → ignora
+
+    const codeNorm = normalizarCodigoOp(code);
+    if (codeNorm !== code) {
+      const novoVal = codeNorm + resto;
+      colB[i][0] = novoVal;
+      corrigidos++;
+      Logger.log('Respostas col B linha ' + (i + 2) + ': "' + val + '" → "' + novoVal + '"');
+    }
+  }
+
+  if (corrigidos > 0) {
+    // Força formato texto antes de gravar para preservar zeros à esquerda
+    const range = aba.getRange(2, 2, lastRow - 1, 1);
+    range.setNumberFormat('@');
+    range.setValues(colB);
+  }
+
+  Logger.log('✅ Respostas col B: ' + corrigidos + ' registro(s) normalizado(s).');
+  return corrigidos;
 }
 
 function verificarEstrutura() {
