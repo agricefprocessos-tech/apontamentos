@@ -556,14 +556,13 @@ function salvarOperador(payload) {
   try {
     const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
     const aba = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
-    // Garante que o código sempre é salvo com 6 dígitos (ex: "000130")
+    // Normaliza: remove zeros à esquerda (ex: "000130" → "130")
     const codigoNorm = normalizarCodigoOp(String(payload.codigo || '').trim());
-    // Força formato texto na coluna A para preservar zeros à esquerda
     aba.getRange('A:A').setNumberFormat('@');
     const dados = aba.getDataRange().getValues();
     for (let i = 1; i < dados.length; i++) {
       if (mesmoOperador(dados[i][0], codigoNorm)) {
-        aba.getRange(i+1, 1).setValue(codigoNorm); // corrige o código se estava sem zeros
+        aba.getRange(i+1, 1).setValue(codigoNorm);
         aba.getRange(i+1, 2).setValue(payload.nome);
         aba.getRange(i+1, 3).setValue('Sim');
         invalidarCacheCadastros();
@@ -706,15 +705,19 @@ function mesmoOperador(a, b) {
   return !isNaN(na) && na !== 0 && !isNaN(nb) && nb !== 0 && na === nb;
 }
 
-// Normaliza código de operador para sempre 6 dígitos com zeros à esquerda.
-// Se o valor da célula foi convertido pelo Sheets para número (ex: 130),
-// reconstitui o formato canônico "000130".
+// Normaliza código de operador: retorna APENAS o número sem zeros à esquerda.
+// Ex: "000130" → "130",  "130" → "130",  130 (número) → "130"
+// Estratégia sem zeros — novos registros já chegam nesse formato naturalmente.
 function normalizarCodigoOp(val) {
   const s = String(val === null || val === undefined ? '' : val).trim();
   if (!s) return s;
   const n = Number(s);
-  // só normaliza se for número puro positivo (sem letras, pontada ou traço)
-  if (!isNaN(n) && n > 0 && String(n) === s) return String(n).padStart(6, '0');
+  // número puro positivo: retorna sem zeros à esquerda
+  if (!isNaN(n) && n > 0 && String(n) === s) return String(n);
+  // string com zeros à esquerda (ex: "000130"): remove zeros
+  const semZeros = s.replace(/^0+(\d)/, '$1');
+  const nSem = Number(semZeros);
+  if (!isNaN(nSem) && nSem > 0) return String(nSem);
   return s;
 }
 
@@ -927,11 +930,10 @@ function limparAbertos() {
 }
 
 // ================================================================
-// NORMALIZAÇÃO DE CÓDIGOS DE OPERADOR — Execute UMA VEZ
-// Corrige registros existentes em Abertos e Cadastro_Operadores
-// para garantir que todos os códigos têm 6 dígitos (ex: "000130").
-// Isso resolve divergências de backlog causadas pelo formato
-// "130" vs "000130" nas diferentes fontes de dados.
+// NORMALIZAÇÃO DE CÓDIGOS DE OPERADOR — Execute sempre que necessário
+// Remove zeros à esquerda de todos os registros (ex: "000130" → "130").
+// Formato padrão: número simples sem padding — compatível com todos os
+// sistemas de entrada que não adicionam zeros automaticamente.
 // ================================================================
 function normalizarCodigosOperador() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);

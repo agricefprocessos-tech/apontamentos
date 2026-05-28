@@ -1301,17 +1301,14 @@ async function sincronizarFila(manual=false){
 
 // ===================== API =====================
 async function postAPI(obj) {
-  // POST com JSON body: mais confiável que GET+URL (sem limite de tamanho, sem cache do CDN)
+  // GET com payload na URL — único método que funciona de forma confiável no
+  // Google Apps Script (POST perde o body no redirect 302 em browsers mobile).
+  // _t=timestamp garante que o CDN do Google não sirva resposta cacheada.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000); // timeout 25s
   try {
-    // Tenta POST primeiro (método preferencial)
-    const res = await fetch(API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain' }, // text/plain evita preflight CORS
-      body: JSON.stringify(obj),
-      signal: controller.signal,
-    });
+    const params = new URLSearchParams({ payload: JSON.stringify(obj), _t: Date.now() });
+    const res = await fetch(API + '?' + params.toString(), { signal: controller.signal });
     const text = await res.text();
     try { return JSON.parse(text); }
     catch { throw new Error('Resposta inválida do servidor: ' + text.substring(0,200)); }

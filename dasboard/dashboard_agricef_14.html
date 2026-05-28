@@ -1347,15 +1347,14 @@ function tsToDateStr(ts){ if(!ts) return ''; return ts.slice(0,10).replace(/\//g
 
 // ── Normalização de código de operador ────────────────────────────────────────
 // Extrai o código numérico do campo func ("000130 - NOME" ou "130 — NOME")
-// e retorna em formato canônico 6 dígitos ("000130").
-// Isso garante que registros antigos (Forms, "000130 - NOME") sejam comparados
-// corretamente com registros novos (app, "130 — NOME" ou "000130 — NOME").
+// e retorna o número SEM zeros à esquerda ("130").
+// Padrão sem zeros — compatível com todos os sistemas de entrada.
 function funcCodeNorm(funcStr) {
   const raw  = String(funcStr || '').trim();
   // Separa pelo primeiro separador (hífen, travessão, espaço) — pega só o código
   const code = raw.split(/[\s\-—]+/)[0].trim();
   const n    = Number(code);
-  if (!isNaN(n) && n > 0) return String(n).padStart(6, '0');
+  if (!isNaN(n) && n > 0) return String(n); // sem padStart — "130" não "000130"
   return code; // ex: "EXTERNO" ou qualquer código não numérico
 }
 function sameFunc(a, b) {
@@ -3635,13 +3634,32 @@ async function confirmarFechamento(){
     const resp=await fetch(url);
     const json=await resp.json();
     if(!json.success) throw new Error(json.message||'Erro desconhecido');
+
+    // ── Atualização otimista ──────────────────────────────────────────────────
+    // Injeta o fechamento no RAW_DATA em memória para que o item suma do backlog
+    // imediatamente, sem aguardar o próximo ciclo de refresh do dashboard.
+    RAW_DATA.push({
+      ts   : carimbo.replace(/(\d{2})\/(\d{2})\/(\d{4}) /,'$3/$2/$1 '), // yyyy/MM/dd HH:mm:ss
+      func : r.func,
+      tipo : 'FECHAMENTO',
+      op   : r.op || '',
+      serie: r.serie || '',
+      impl : r.impl || '',
+      client: r.client || '',
+      item : r.item || '',
+      qty  : qtdVal === '' ? '' : String(qtd),
+      obs  : obs,
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     errEl.style.color='var(--accent3)';
     errEl.textContent='✔ Fechamento registrado!';
     setTimeout(()=>{
       errEl.style.color='';
       fecharModal();
-      renderBacklog(); // recalcula lista
-    },1800);
+      renderBacklog(); // recalcula: item já some pois o fechamento está no RAW_DATA
+      renderKPIs();    // atualiza contador de abertos/fechados
+    },900); // reduzido para resposta mais rápida
   } catch(err){
     errEl.textContent='Erro: '+err.message;
     btnOk.disabled=false;
