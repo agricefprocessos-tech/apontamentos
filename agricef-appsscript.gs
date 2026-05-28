@@ -65,7 +65,15 @@ function doGet(e) {
   if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
     try {
       enviarRelatorioSemanal();
-      return jsonResponse({ success: true, message: 'Relatório enviado para ' + EMAIL_RELATORIO });
+      return jsonResponse({ success: true, message: 'Relatório semanal enviado para ' + EMAIL_RELATORIO });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'triggerDiario' && e.parameter.key === 'AGF2026') {
+    try {
+      enviarRelatorioDiario();
+      return jsonResponse({ success: true, message: 'Relatório diário enviado para ' + EMAIL_RELATORIO });
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
@@ -74,6 +82,23 @@ function doGet(e) {
     try {
       criarTriggerRelatorioSemanal();
       return jsonResponse({ success: true, message: 'Trigger semanal criado com sucesso.' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'ativarTriggerDiario' && e.parameter.key === 'AGF2026') {
+    try {
+      criarTriggerRelatorioDiario();
+      return jsonResponse({ success: true, message: 'Trigger diário criado (seg–sex 07h).' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'ativarTodosTriggers' && e.parameter.key === 'AGF2026') {
+    try {
+      criarTriggerRelatorioSemanal();
+      criarTriggerRelatorioDiario();
+      return jsonResponse({ success: true, message: 'Triggers semanal e diário criados com sucesso.' });
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
@@ -1202,10 +1227,12 @@ function _rsMontarRelatorio() {
     else continue; // ignora paradas e retrabalhos neste contexto
     const campoF = String(r[5] || '');
     const pts    = campoF.split('|').map(x => x.trim());
+    const funcRaw = String(r[1] || '').trim();
     linhas.push({
       ts,
       tipo,
-      func:   String(r[1] || '').trim(),
+      func:     funcRaw,
+      funcCod:  _rdCodigoOp(funcRaw), // código normalizado para pareamento
       op:     String(r[3] || '').trim(),
       item:   String(r[4] || '').trim(),
       serie:  pts[0] || '',
@@ -1227,7 +1254,8 @@ function _rsMontarRelatorio() {
       let melhor = null, melhorScore = -1;
       for (let i = 0; i < aberturas.length; i++) {
         const a = aberturas[i];
-        if (a._used || a.func !== fech.func || a.ts > fech.ts) continue;
+        // funcCod tolera hífen vs em-dash e variações de zeros
+        if (a._used || a.funcCod !== fech.funcCod || a.ts > fech.ts) continue;
         let score = 1;
         if (a.op    === fech.op)    score += 4;
         if (a.serie === fech.serie) score += 2;
@@ -1257,13 +1285,18 @@ function _rsMontarRelatorio() {
     trend.push({ ini, fim, ..._rsKpiSemana(pares, ini, fim) });
   }
 
-  // ----- Top operadores (semana atual) -----
+  // ----- Top operadores (semana atual) — agrupa por código normalizado -----
   const contOp = {};
   pares.filter(p => p._fechTs >= seg).forEach(p => {
-    const nome = p.func.includes(' - ') ? p.func.split(' - ').slice(1).join(' ') : p.func;
-    contOp[nome] = (contOp[nome] || 0) + 1;
+    const cod  = p.funcCod || p.func;
+    const nome = _rdNomeOp(p.func);
+    if (!contOp[cod]) contOp[cod] = { nome, count: 0 };
+    contOp[cod].count++;
   });
-  const topOperadores = Object.entries(contOp).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topOperadores = Object.values(contOp)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map(e => [e.nome, e.count]);
 
   // ----- Top operações (semana atual) -----
   const contOperacao = {};
@@ -1476,7 +1509,7 @@ function _rsGerarHtml(rel) {
       var diasAberto = Math.floor((agora - o.ts) / 86400000);
       var corDias    = diasAberto >= DIAS_ALERTA_ATRASO ? '#f87171' : '#8b949e';
       var peso       = diasAberto >= DIAS_ALERTA_ATRASO ? '700' : '400';
-      var nome       = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
+      var nome       = _rdNomeOp(o.func);
       htmlBacklog += '<tr>'
         + '<td style="padding:6px 10px;font-size:12px;color:#8b949e;border-bottom:1px solid #252d40;">' + fmt(new Date(o.ts)) + '</td>'
         + '<td style="padding:6px 10px;font-size:12px;color:#e6edf3;border-bottom:1px solid #252d40;">' + nome + '</td>'
@@ -1710,6 +1743,26 @@ function criarTriggerRelatorioDiario() {
 }
 
 // ---------------------------------------------------------------
+// HELPERS DE OPERADOR — tratam hífen (' - ') e em-dash (' — ')
+// ---------------------------------------------------------------
+
+// Extrai código numérico do campo func (ex: "130 — EDERSON" → "130")
+function _rdCodigoOp(func) {
+  var s = String(func || '').trim();
+  var cod = s.split(/[\s\-—]+/)[0].trim();
+  var n = Number(cod);
+  return (!isNaN(n) && n > 0) ? String(n) : cod;
+}
+
+// Extrai nome limpo do campo func (ex: "130 — EDERSON LUIS" → "EDERSON LUIS")
+function _rdNomeOp(func) {
+  var s = String(func || '').trim();
+  // Remove prefixo numérico e separador (hífen ou em-dash)
+  var m = s.match(/^\d+\s*[\-—]\s*(.+)/);
+  return m ? m[1].trim() : s;
+}
+
+// ---------------------------------------------------------------
 // MONTAR RELATÓRIO DIÁRIO
 // ---------------------------------------------------------------
 function _rdMontarRelatorio() {
@@ -1746,10 +1799,13 @@ function _rdMontarRelatorio() {
 
     var campoF = String(r[5] || '');
     var pts    = campoF.split('|').map(function(x){ return x.trim(); });
+    var funcRaw = String(r[1] || '').trim();
     linhas.push({
       ts,
       tipo,
-      func:  String(r[1] || '').trim(),
+      func:     funcRaw,
+      funcCod:  _rdCodigoOp(funcRaw), // código numérico para pareamento robusto
+      funcNome: _rdNomeOp(funcRaw),   // nome limpo para exibição
       op:    String(r[3] || '').trim(),
       item:  String(r[4] || '').trim(),
       serie: pts[0] || '',
@@ -1758,7 +1814,7 @@ function _rdMontarRelatorio() {
     });
   }
 
-  // --- Pareamento ABERTURA ↔ FECHAMENTO (two-pass greedy) ---
+  // --- Pareamento ABERTURA ↔ FECHAMENTO (two-pass greedy, usa código normalizado) ---
   var aberturas = linhas
     .filter(function(r){ return r.tipo === 'ABERTURA'; })
     .map(function(r){ return Object.assign({}, r, { _used: false, _fechTs: null, _leadMs: 0 }); });
@@ -1769,7 +1825,8 @@ function _rdMontarRelatorio() {
       var melhor = null, melhorScore = -1;
       for (var i = 0; i < aberturas.length; i++) {
         var a = aberturas[i];
-        if (a._used || a.func !== fech.func || a.ts > fech.ts) continue;
+        // Usa funcCod para tolerância a hífen vs em-dash e variações de código
+        if (a._used || a.funcCod !== fech.funcCod || a.ts > fech.ts) continue;
         var score = 1;
         if (a.op    === fech.op)    score += 4;
         if (a.serie === fech.serie) score += 2;
@@ -1798,13 +1855,14 @@ function _rdMontarRelatorio() {
   var refAberturas = refDiaLabel === 'Hoje' ? aberturasHoje  : aberturasOntem;
   var refFechados  = refDiaLabel === 'Hoje' ? fechamentosHoje : fechamentosOntem;
 
-  // --- Backlog por operador (quem conversar) ---
+  // --- Backlog por operador (quem conversar) — agrupa por código normalizado ---
   var backlogPorOp = {};
   backlog.forEach(function(o){
-    var nome = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
-    if (!backlogPorOp[nome]) backlogPorOp[nome] = { count: 0, ordens: [], nome: nome };
-    backlogPorOp[nome].count++;
-    backlogPorOp[nome].ordens.push(o);
+    var cod  = o.funcCod  || o.func;
+    var nome = o.funcNome || o.func;
+    if (!backlogPorOp[cod]) backlogPorOp[cod] = { count: 0, ordens: [], nome: nome };
+    backlogPorOp[cod].count++;
+    backlogPorOp[cod].ordens.push(o);
   });
   var topBacklogOp = Object.values(backlogPorOp)
     .sort(function(a,b){ return b.count - a.count; })
@@ -1835,21 +1893,27 @@ function _rdMontarRelatorio() {
     .slice(0, 5);
 
   // --- Operadores sem atividade nos últimos 2 dias úteis ---
+  // Agrupados por código normalizado para evitar duplicatas (hífen vs em-dash)
   var dois_dias_atras = new Date(hoje); dois_dias_atras.setDate(hoje.getDate() - 2);
-  var ativosRecentes = new Set(
+  var ativosRecentesCod = new Set(
     linhas.filter(function(r){ return r.ts >= dois_dias_atras; })
-          .map(function(r){ return r.func; })
+          .map(function(r){ return r.funcCod || r.func; })
   );
-  var todosOps = new Set(linhas.map(function(r){ return r.func; }));
-  var semAtividade = [...todosOps].filter(function(f){ return !ativosRecentes.has(f); })
-    .map(function(f){ return f.includes(' - ') ? f.split(' - ').slice(1).join(' ') : f; })
+  var todosOpsCod = {}; // cod → nome
+  linhas.forEach(function(r){
+    var cod = r.funcCod || r.func;
+    if (!todosOpsCod[cod]) todosOpsCod[cod] = r.funcNome || r.func;
+  });
+  var semAtividade = Object.entries(todosOpsCod)
+    .filter(function(e){ return !ativosRecentesCod.has(e[0]); })
+    .map(function(e){ return e[1]; })
     .sort();
 
   // --- Retrabalhos ativos ---
   var retrabs = linhas.filter(function(r){ return r.tipo === 'RETRAB_INI'; });
   var retrAbertos = retrabs.filter(function(ri){
     return !linhas.some(function(rf){
-      return rf.tipo === 'RETRAB_FIM' && rf.func === ri.func && rf.ts > ri.ts;
+      return rf.tipo === 'RETRAB_FIM' && rf.funcCod === ri.funcCod && rf.ts > ri.ts;
     });
   });
 
@@ -1935,7 +1999,7 @@ function _rdAcoes(backlog, topOps, topGargalos, antigas, semAtividade, fechados,
 
   // 5. Retrabalhos em aberto
   if (retrabs.length > 0) {
-    var opRetrabs = [...new Set(retrabs.map(function(r){ return r.func.includes(' - ') ? r.func.split(' - ').slice(1).join(' ') : r.func; }))];
+    var opRetrabs = [...new Set(retrabs.map(function(r){ return _rdNomeOp(r.func); }))];
     lista.push('🔄 <b>Retrabalho em andamento:</b> ' + opRetrabs.join(', ')
       + '. Acompanhar conclusão e registrar término de retrabalho no sistema.');
   }
@@ -2032,7 +2096,7 @@ function _rdGerarHtml(rel) {
     ordensAntigas.forEach(function(o) {
       var dias     = Math.floor((agora - o.ts) / 86400000);
       var corDias  = dias >= 5 ? '#f87171' : dias >= 3 ? '#fb923c' : '#8b949e';
-      var nome     = o.func.includes(' - ') ? o.func.split(' - ').slice(1).join(' ') : o.func;
+      var nome     = _rdNomeOp(o.func);
       htmlAntigas += '<tr>'
         + '<td style="padding:6px 10px;font-size:11px;color:#8b949e;border-bottom:1px solid #252d40;">' + fmt(o.ts) + '</td>'
         + '<td style="padding:6px 10px;font-size:12px;color:#e6edf3;border-bottom:1px solid #252d40;">' + nome + '</td>'
