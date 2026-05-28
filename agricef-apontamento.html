@@ -388,6 +388,7 @@ label:first-child{margin-top:0}
     <div class="admin-tabs">
       <button class="admin-tab active" onclick="switchTab('operadores')">Operadores</button>
       <button class="admin-tab" onclick="switchTab('series')">Séries</button>
+      <button class="admin-tab" onclick="switchTab('operacoes')">Operações</button>
     </div>
     <div id="tabOperadores">
       <div class="card">
@@ -414,6 +415,24 @@ label:first-child{margin-top:0}
       <div class="section-title">Séries ativas</div>
       <div id="listaSeries"></div>
     </div>
+    <div id="tabOperacoes" style="display:none">
+      <div class="card">
+        <div class="section-title">Nova operação</div>
+        <div class="form-row">
+          <div style="max-width:100px"><label>Código</label><input type="text" id="newOpcCod" placeholder="0110" maxlength="4" oninput="this.value=this.value.replace(/\D/g,'').slice(0,4)"></div>
+          <div style="flex:2"><label>Descrição</label><input type="text" id="newOpcNome" placeholder="EX: MONTAGEM HIDRÁULICA"></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:10px;margin-top:10px;font-size:13px;color:var(--text2);cursor:pointer">
+          <input type="checkbox" id="newOpcRequerQtd" style="width:18px;height:18px;cursor:pointer">
+          Exige quantidade planejada ao abrir
+        </label>
+        <button class="btn-submit" style="margin-top:14px" onclick="adicionarOperacao()">Adicionar operação</button>
+      </div>
+      <div class="section-title" style="margin-top:16px">Operações padrão</div>
+      <div id="listaOpBuiltin"></div>
+      <div class="section-title" style="margin-top:16px">Operações adicionadas pelo líder</div>
+      <div id="listaOpCustom"></div>
+    </div>
   </div>
 </div>
 
@@ -424,9 +443,35 @@ label:first-child{margin-top:0}
 const API     = 'https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
 const PIN_ADMIN = '1234';
 
-// Operações que EXIGEM quantidade
-const OPS_REQUEREM_QTD = ['0010','0020','0030','0040','0050','0060','0080'];
-// Cortar, Furar, Mont.Caldeiraria, Soldar, Lixar, Pintar, Inspecionar
+// Operações BUILT-IN (sempre presentes, não podem ser removidas)
+const OPS_BUILTIN = [
+  {cod:'0010',nome:'Cortar',        requerQtd:true },
+  {cod:'0020',nome:'Furar',         requerQtd:true },
+  {cod:'0030',nome:'Mont. caldeiraria', requerQtd:true },
+  {cod:'0040',nome:'Soldar',        requerQtd:true },
+  {cod:'0050',nome:'Lixar',         requerQtd:true },
+  {cod:'0060',nome:'Pintar',        requerQtd:true },
+  {cod:'0070',nome:'Mont. mec./elét.', requerQtd:false },
+  {cod:'0080',nome:'Inspecionar',   requerQtd:true },
+  {cod:'0090',nome:'Calafetar',     requerQtd:false },
+  {cod:'0100',nome:'Adesivar',      requerQtd:false },
+  {cod:'0101',nome:'Testes',        requerQtd:false },
+  {cod:'0102',nome:'Treinamento',   requerQtd:false },
+];
+
+// Retorna lista completa: built-in + customizadas pelo líder (ordenadas por código)
+function getOperacoes() {
+  const custom = (state.operacoesCustom || []).filter(
+    c => !OPS_BUILTIN.some(b => b.cod === c.cod) // evita duplicata se líder re-cadastrar
+  );
+  return [...OPS_BUILTIN, ...custom].sort((a,b) => a.cod.localeCompare(b.cod));
+}
+
+// Verifica se operação exige quantidade (built-in ou custom)
+function opRequerQtd(cod) {
+  const op = getOperacoes().find(o => o.cod === cod);
+  return op ? op.requerQtd === true : false;
+}
 
 // ===================== ESTADO =====================
 const state = {
@@ -434,16 +479,8 @@ const state = {
   tipo:'', operacao:'', opRetrabalho:'', retrabalho:'', numRNC:'',
   parada:'', setup:'', lote:[], loteSeries:[], abertoInfo:null,
   modoFechamentoRapido: false, modoLote: false,
-  operadores:[], series:[],
+  operadores:[], series:[], operacoesCustom:[],
 };
-
-const operacoes = [
-  {cod:'0010',nome:'Cortar'},{cod:'0020',nome:'Furar'},{cod:'0030',nome:'Mont. caldeiraria'},
-  {cod:'0040',nome:'Soldar'},{cod:'0050',nome:'Lixar'},{cod:'0060',nome:'Pintar'},
-  {cod:'0070',nome:'Mont. mec./elét.'},{cod:'0080',nome:'Inspecionar'},
-  {cod:'0090',nome:'Calafetar'},{cod:'0100',nome:'Adesivar'},
-  {cod:'0101',nome:'Testes'},{cod:'0102',nome:'Treinamento'},
-];
 
 const paradas = [
   'Set-up','Falta de material','Quebra de máquina','Reunião',
@@ -521,10 +558,10 @@ function carimboBrowser() {
 const CACHE_KEY = 'agricef_cadastros';
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 
-function salvarCacheLocal(operadores, series) {
+function salvarCacheLocal(operadores, series, operacoesCustom) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
-      ts: Date.now(), operadores, series
+      ts: Date.now(), operadores, series, operacoesCustom: operacoesCustom || []
     }));
   } catch { /* localStorage pode estar cheio — ignora silenciosamente */ }
 }
@@ -545,10 +582,13 @@ async function carregarCadastros(forcar = false) {
   if (!forcar) {
     const cache = lerCacheLocal();
     if (cache) {
-      state.operadores = cache.operadores;
-      state.series     = cache.series;
+      state.operadores      = cache.operadores;
+      state.series          = cache.series;
+      state.operacoesCustom = cache.operacoesCustom || [];
       popularSelectOperador();
       popularSelectImplemento();
+      renderOpGrid('opGrid','selecionarOperacao');
+      renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
       renderListaAdmin();
       setLoading(false);
       return;
@@ -561,9 +601,10 @@ async function carregarCadastros(forcar = false) {
       const res  = await fetch(API+'?action=getCadastros');
       const data = await res.json();
       if (data.success) {
-        state.operadores = data.operadores;
-        state.series     = data.series;
-        salvarCacheLocal(data.operadores, data.series);
+        state.operadores      = data.operadores;
+        state.series          = data.series;
+        state.operacoesCustom = data.operacoesCustom || [];
+        salvarCacheLocal(data.operadores, data.series, data.operacoesCustom);
         break; // sucesso — sai do loop
       } else {
         usarFallback(); break;
@@ -580,6 +621,8 @@ async function carregarCadastros(forcar = false) {
   }
   popularSelectOperador();
   popularSelectImplemento();
+  renderOpGrid('opGrid','selecionarOperacao');
+  renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
   renderListaAdmin();
   setLoading(false);
 }
@@ -791,7 +834,7 @@ function iniciarFechamentoRapido() {
 
   // Mostra campo quantidade só se operação exige
   const codOp = (info.operacao||'').substring(0,4);
-  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) {
+  if (opRequerQtd(codOp) || info.qtdPlanejada) {
     mostrar('blocoQtdFechamento');
   }
 
@@ -873,7 +916,7 @@ function preencherFechamentoSeAberto() {
   document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
   document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
   const codOp = (info.operacao||'').substring(0,4);
-  if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
+  if (opRequerQtd(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
   else esconder('blocoQtdFechamento');
   mostrar('blocoFechamentoInteligente');
 }
@@ -903,7 +946,7 @@ function calcularSaldo() {
 }
 
 function renderOpGrid(id, fn) {
-  document.getElementById(id).innerHTML = operacoes.map(op =>
+  document.getElementById(id).innerHTML = getOperacoes().map(op =>
     `<button class="op-btn" onclick="${fn}('${op.cod}')" id="${id}-${op.cod}">
       <span class="op-code">${op.cod}</span><span class="op-name">${op.nome}</span>
     </button>`).join('');
@@ -919,7 +962,7 @@ function selecionarOperacao(cod) {
   document.querySelectorAll('#opGrid .op-btn').forEach(b=>b.classList.remove('selected'));
   document.getElementById('opGrid-'+cod).classList.add('selected');
   state.operacao = cod;
-  if (OPS_REQUEREM_QTD.includes(cod)) mostrar('campoQtdAbertura');
+  if (opRequerQtd(cod)) mostrar('campoQtdAbertura');
   else esconder('campoQtdAbertura');
   // Verifica saldo parcial quando operação E codItem já estiverem preenchidos
   verificarSaldoSeCompleto();
@@ -1149,7 +1192,7 @@ function validarFormulario() {
   if (ehFechamentoInteligente || state.modoFechamentoRapido) {
     const info = state.abertoInfo;
     const codOp = (info.operacao||'').substring(0,4);
-    if (OPS_REQUEREM_QTD.includes(codOp) || info.qtdPlanejada) {
+    if (opRequerQtd(codOp) || info.qtdPlanejada) {
       const qtd = document.getElementById('fechQuantidade').value;
       // Permite explicitamente 0 (fechar sem produzir nenhuma peça — saldo = total planejado)
       if (qtd === '' || qtd === null || qtd === undefined) {
@@ -1163,7 +1206,7 @@ function validarFormulario() {
   if (state.tipo==='ABERTURA') {
     if (!state.operacao) { showToast('Selecione a operação','error'); return false; }
     if (!document.getElementById('codItem').value) { showToast('Informe o código do item','error'); return false; }
-    if (OPS_REQUEREM_QTD.includes(state.operacao)) {
+    if (opRequerQtd(state.operacao)) {
       const qtd = document.getElementById('qtdPlanejada').value;
       if (!qtd || Number(qtd) <= 0) { showToast('Informe a quantidade planejada','error'); return false; }
     }
@@ -1343,17 +1386,80 @@ function pinOk(){
   } else { showToast('PIN incorreto','error'); pinBuffer=''; atualizarPinDisplay(); }
 }
 function switchTab(tab){
-  document.querySelectorAll('.admin-tab').forEach((b,i)=>b.classList.toggle('active',(i===0&&tab==='operadores')||(i===1&&tab==='series')));
-  document.getElementById('tabOperadores').style.display=tab==='operadores'?'block':'none';
-  document.getElementById('tabSeries').style.display=tab==='series'?'block':'none';
+  const tabs = ['operadores','series','operacoes'];
+  document.querySelectorAll('.admin-tab').forEach((b,i) => b.classList.toggle('active', tabs[i]===tab));
+  document.getElementById('tabOperadores').style.display = tab==='operadores' ? 'block' : 'none';
+  document.getElementById('tabSeries').style.display     = tab==='series'     ? 'block' : 'none';
+  document.getElementById('tabOperacoes').style.display  = tab==='operacoes'  ? 'block' : 'none';
 }
 function renderListaAdmin(){
-  document.getElementById('listaOperadores').innerHTML=state.operadores.length
-    ?state.operadores.map(op=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${op.codigo}</div><div class="cadastro-item-name">${op.nome}</div></div><button class="btn-danger" onclick="removerOperador('${op.codigo}')">Remover</button></div>`).join('')
-    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhum operador.</div>';
-  document.getElementById('listaSeries').innerHTML=state.series.length
-    ?state.series.map(s=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${s.nrSerie} — ${s.cliente}</div><div class="cadastro-item-name">${s.implemento}</div></div><button class="btn-danger" onclick="removerSerie('${s.nrSerie}')">Remover</button></div>`).join('')
-    :'<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma série.</div>';
+  document.getElementById('listaOperadores').innerHTML = state.operadores.length
+    ? state.operadores.map(op=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${op.codigo}</div><div class="cadastro-item-name">${op.nome}</div></div><button class="btn-danger" onclick="removerOperador('${op.codigo}')">Remover</button></div>`).join('')
+    : '<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhum operador.</div>';
+  document.getElementById('listaSeries').innerHTML = state.series.length
+    ? state.series.map(s=>`<div class="cadastro-item"><div class="cadastro-item-info"><div class="cadastro-item-code">${s.nrSerie} — ${s.cliente}</div><div class="cadastro-item-name">${s.implemento}</div></div><button class="btn-danger" onclick="removerSerie('${s.nrSerie}')">Remover</button></div>`).join('')
+    : '<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma série.</div>';
+  // Operações built-in (somente visualização)
+  document.getElementById('listaOpBuiltin').innerHTML = OPS_BUILTIN.map(op =>
+    `<div class="cadastro-item">
+      <div class="cadastro-item-info">
+        <div class="cadastro-item-code">${op.cod}${op.requerQtd?' · exige qtd':''}</div>
+        <div class="cadastro-item-name">${op.nome}</div>
+      </div>
+      <span style="font-size:11px;color:var(--text3);padding:4px 8px;border:1px solid var(--border);border-radius:4px">Padrão</span>
+    </div>`).join('');
+  // Operações customizadas (com botão remover)
+  const custom = state.operacoesCustom || [];
+  document.getElementById('listaOpCustom').innerHTML = custom.length
+    ? custom.map(op =>
+        `<div class="cadastro-item">
+          <div class="cadastro-item-info">
+            <div class="cadastro-item-code">${op.cod}${op.requerQtd?' · exige qtd':''}</div>
+            <div class="cadastro-item-name">${op.nome}</div>
+          </div>
+          <button class="btn-danger" onclick="removerOperacao('${op.cod}')">Remover</button>
+        </div>`)
+        .join('')
+    : '<div style="color:var(--text2);font-size:13px;padding:12px 0">Nenhuma operação adicionada pelo líder.</div>';
+}
+async function adicionarOperacao(){
+  const cod  = document.getElementById('newOpcCod').value.trim().padStart(4,'0');
+  const nome = document.getElementById('newOpcNome').value.trim().toUpperCase();
+  const requerQtd = document.getElementById('newOpcRequerQtd').checked;
+  if(!cod||cod==='0000'||!nome){showToast('Preencha código e descrição','error');return;}
+  if(OPS_BUILTIN.some(b=>b.cod===cod)){showToast('Código já existe nas operações padrão','error');return;}
+  setLoading(true);
+  try{
+    const d = await postAPI({action:'salvarOperacao', cod, nome, requerQtd});
+    if(d.success){
+      const idx = (state.operacoesCustom||[]).findIndex(o=>o.cod===cod);
+      if(idx>=0) state.operacoesCustom[idx]={cod,nome,requerQtd};
+      else { if(!state.operacoesCustom) state.operacoesCustom=[]; state.operacoesCustom.push({cod,nome,requerQtd}); }
+      salvarCacheLocal(state.operadores, state.series, state.operacoesCustom);
+      renderListaAdmin();
+      renderOpGrid('opGrid','selecionarOperacao');
+      renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
+      document.getElementById('newOpcCod').value='';
+      document.getElementById('newOpcNome').value='';
+      document.getElementById('newOpcRequerQtd').checked=false;
+      showToast('Operação adicionada','success');
+    } else showToast(d.message,'error');
+  } catch{showToast('Erro ao salvar','error');} finally{setLoading(false);}
+}
+async function removerOperacao(cod){
+  if(!confirm('Remover operação '+cod+'?'))return;
+  setLoading(true);
+  try{
+    const d = await postAPI({action:'removerOperacao', cod});
+    if(d.success){
+      state.operacoesCustom=(state.operacoesCustom||[]).filter(o=>o.cod!==cod);
+      salvarCacheLocal(state.operadores, state.series, state.operacoesCustom);
+      renderListaAdmin();
+      renderOpGrid('opGrid','selecionarOperacao');
+      renderOpGrid('opGridRetrabalho','selecionarOpRetrabalho');
+      showToast('Operação removida','success');
+    } else showToast(d.message,'error');
+  } catch{showToast('Erro ao remover','error');} finally{setLoading(false);}
 }
 async function adicionarOperador(){
   const cod=document.getElementById('newOpCodigo').value.trim().toUpperCase();

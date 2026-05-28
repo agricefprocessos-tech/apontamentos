@@ -2710,11 +2710,14 @@ function getAbsenceData(){
   const fOp    = document.getElementById('fOp')?.value    || '';
   const fItem  = document.getElementById('fItem')?.value  || '';
 
+  // Normalize fFunc to code for comparison (handles hyphen vs em-dash variants)
+  const fFuncCode = fFunc ? (funcCodeNorm(fFunc) || fFunc) : '';
+
   // Absence should be based on ALL records (not filtered by serie/op/item)
   // because a worker may be present but working on a different serie/op
-  // Only filter by func and date for absence calculation
+  // Only filter by func (by code) and date for absence calculation
   const absenceBase = RAW_DATA.filter(r => {
-    if(fFunc && r.func !== fFunc) return false;
+    if(fFuncCode && (funcCodeNorm(r.func)||r.func) !== fFuncCode) return false;
     const d = tsToDateStr(r.ts);
     if(fFrom && d < fFrom) return false;
     if(fTo   && d > fTo)   return false;
@@ -2729,25 +2732,39 @@ function getAbsenceData(){
   });
   const totalOpen = openDays.length;
 
-  // Days each func was present (from full base, not filtered by serie/op/item)
-  const funcPresent = {};
+  // Days each func was present — keyed by NORMALIZED CODE (not raw string)
+  // This merges "130 - EDERSON" and "130 — EDERSON" under the same key "130"
+  const funcPresent  = {};
+  const funcCanonical = {}; // best display label per code (prefer em-dash form = newer records)
   absenceBase.forEach(r => {
+    const code = funcCodeNorm(r.func) || r.func;
     const d = tsToDateStr(r.ts);
-    if(!funcPresent[r.func]) funcPresent[r.func] = new Set();
-    funcPresent[r.func].add(d);
+    if(!funcPresent[code]) {
+      funcPresent[code]  = new Set();
+      funcCanonical[code] = r.func;
+    } else if(r.func.includes('—') && !funcCanonical[code].includes('—')) {
+      funcCanonical[code] = r.func; // upgrade to em-dash form when found
+    }
+    funcPresent[code].add(d);
   });
 
-  // All funcs visible in current filtered view
-  const funcs = fFunc
-    ? [fFunc]
-    : [...new Set(RAW_DATA.map(r => r.func))].sort();
+  // All unique funcs — deduplicated by code to avoid duplicate rows
+  // (old records may have hyphen, new records em-dash — same operator, one row)
+  const seenCodes = new Set();
+  const funcCodes = fFuncCode
+    ? [fFuncCode]
+    : RAW_DATA.reduce((acc, r) => {
+        const code = funcCodeNorm(r.func) || r.func;
+        if(!seenCodes.has(code)) { seenCodes.add(code); acc.push(code); }
+        return acc;
+      }, []).sort();
 
-  const rows = funcs.map(func => {
-    const present   = funcPresent[func] || new Set();
+  const rows = funcCodes.map(code => {
+    const present     = funcPresent[code] || new Set();
     const absentDays  = openDays.filter(d => !present.has(d));
     const presentDays = openDays.filter(d =>  present.has(d));
-    const name = funcName(func);
-    const code = funcCodeNorm(func) || '';
+    const func = funcCanonical[code] || code; // use best-known label
+    const name = funcName(func) || code;
     const attPct = totalOpen > 0 ? Math.round(presentDays.length / totalOpen * 100) : 100;
     return { func, name, code, totalOpen, presentDays: presentDays.length, absentDays, attPct, absentH: absentDays.length * 8 };
   });

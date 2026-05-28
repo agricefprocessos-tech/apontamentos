@@ -19,12 +19,13 @@
 //   O  OBSERVAÇÃO  ← usado para QTD PLANEJADA
 // ================================================================
 
-const SPREADSHEET_ID = '15vtJ2eOw3Zd9f5MmwqEj18nsGAvVkFYFpsUsRbZM6Ik';
-const ABA_RESPOSTAS  = 'Respostas do Formulário 1';
-const ABA_ABERTOS    = 'Abertos';
-const ABA_OPERADORES = 'Cadastro_Operadores';
-const ABA_SALDO      = 'Saldo_Parcial';
-const ABA_SERIES     = 'Cadastro_Series';
+const SPREADSHEET_ID  = '15vtJ2eOw3Zd9f5MmwqEj18nsGAvVkFYFpsUsRbZM6Ik';
+const ABA_RESPOSTAS   = 'Respostas do Formulário 1';
+const ABA_ABERTOS     = 'Abertos';
+const ABA_OPERADORES  = 'Cadastro_Operadores';
+const ABA_SALDO       = 'Saldo_Parcial';
+const ABA_SERIES      = 'Cadastro_Series';
+const ABA_OPERACOES   = 'Cadastro_Operacoes';
 
 const TIPOS_APONTAMENTO = {
   'ABERTURA':           'ABERTURA',
@@ -98,10 +99,12 @@ function doGet(e) {
   if (e.parameter.payload) {
     try {
       const payload = JSON.parse(e.parameter.payload);
-      if (payload.action === 'salvarOperador')  return salvarOperador(payload);
-      if (payload.action === 'removerOperador') return removerOperador(payload);
-      if (payload.action === 'salvarSerie')     return salvarSerie(payload);
-      if (payload.action === 'removerSerie')    return removerSerie(payload);
+      if (payload.action === 'salvarOperador')   return salvarOperador(payload);
+      if (payload.action === 'removerOperador')  return removerOperador(payload);
+      if (payload.action === 'salvarSerie')      return salvarSerie(payload);
+      if (payload.action === 'removerSerie')     return removerSerie(payload);
+      if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
+      if (payload.action === 'removerOperacao')  return removerOperacao(payload);
       return gravarApontamento(payload);
     } catch (err) {
       return jsonResponse({ success: false, message: 'Erro ao processar payload: ' + err.message });
@@ -119,10 +122,12 @@ function doPost(e) {
     } else {
       payload = JSON.parse(e.postData.contents);
     }
-    if (payload.action === 'salvarOperador')  return salvarOperador(payload);
-    if (payload.action === 'removerOperador') return removerOperador(payload);
-    if (payload.action === 'salvarSerie')     return salvarSerie(payload);
-    if (payload.action === 'removerSerie')    return removerSerie(payload);
+    if (payload.action === 'salvarOperador')   return salvarOperador(payload);
+    if (payload.action === 'removerOperador')  return removerOperador(payload);
+    if (payload.action === 'salvarSerie')      return salvarSerie(payload);
+    if (payload.action === 'removerSerie')     return removerSerie(payload);
+    if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
+    if (payload.action === 'removerOperacao')  return removerOperacao(payload);
     return gravarApontamento(payload);
   } catch (err) {
     return jsonResponse({ success: false, message: 'Erro: ' + err.message });
@@ -482,12 +487,13 @@ function getCadastros() {
   try {
     // Cache de 5 min — evita abrir a planilha a cada carregamento de página
     const cache  = CacheService.getScriptCache();
-    const cached = cache.get('cadastros_v2');
+    const cached = cache.get('cadastros_v3');
     if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
 
-    const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
-    const abaOp = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
-    const abaSe = garantirAbaCadastro(ss, ABA_SERIES,     ['NrSerie', 'Implemento', 'Cliente', 'Ativo']);
+    const ss     = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const abaOp  = garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo', 'Nome', 'Ativo']);
+    const abaSe  = garantirAbaCadastro(ss, ABA_SERIES,     ['NrSerie', 'Implemento', 'Cliente', 'Ativo']);
+    const abaOpc = garantirAbaCadastro(ss, ABA_OPERACOES,  ['Codigo', 'Nome', 'ExigeQtd']);
 
     const operadores = abaOp.getDataRange().getValues().slice(1)
       .filter(r => String(r[2]).toUpperCase() !== 'NÃO' && r[0] !== '')
@@ -497,8 +503,17 @@ function getCadastros() {
       .filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
       .map(r => ({ nrSerie: String(r[0]).trim(), implemento: String(r[1]).trim(), cliente: String(r[2]).trim() }));
 
-    const resultado = JSON.stringify({ success: true, operadores, series });
-    cache.put('cadastros_v2', resultado, 300); // 5 minutos
+    // Operações customizadas criadas pelo líder (complementam as built-in do app)
+    const operacoesCustom = abaOpc.getDataRange().getValues().slice(1)
+      .filter(r => r[0] !== '')
+      .map(r => ({
+        cod:       String(r[0]).trim(),
+        nome:      String(r[1]).trim(),
+        requerQtd: String(r[2]).toUpperCase() === 'SIM',
+      }));
+
+    const resultado = JSON.stringify({ success: true, operadores, series, operacoesCustom });
+    cache.put('cadastros_v3', resultado, 300); // 5 minutos
     return ContentService.createTextOutput(resultado).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -506,7 +521,11 @@ function getCadastros() {
 }
 
 function invalidarCacheCadastros() {
-  try { CacheService.getScriptCache().remove('cadastros_v2'); } catch(e) {}
+  try {
+    const c = CacheService.getScriptCache();
+    c.remove('cadastros_v3');
+    c.remove('cadastros_v2'); // limpa versão antiga se ainda existir
+  } catch(e) {}
 }
 
 // ================================================================
@@ -623,6 +642,54 @@ function removerSerie(payload) {
       }
     }
     return jsonResponse({ success: false, message: 'Série não encontrada.' });
+  } catch (err) { return jsonResponse({ success: false, message: err.message }); }
+}
+
+// ================================================================
+// OPERAÇÕES CUSTOMIZADAS
+// ================================================================
+
+function salvarOperacao(payload) {
+  try {
+    const cod  = String(payload.cod  || '').trim().toUpperCase();
+    const nome = String(payload.nome || '').trim().toUpperCase();
+    if (!cod || !nome) return jsonResponse({ success: false, message: 'Código e nome são obrigatórios.' });
+
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = garantirAbaCadastro(ss, ABA_OPERACOES, ['Codigo', 'Nome', 'ExigeQtd']);
+    const exigeQtd = payload.requerQtd ? 'Sim' : 'Não';
+
+    const dados = aba.getDataRange().getValues();
+    for (let i = 1; i < dados.length; i++) {
+      if (String(dados[i][0]).trim().toUpperCase() === cod) {
+        aba.getRange(i+1, 2).setValue(nome);
+        aba.getRange(i+1, 3).setValue(exigeQtd);
+        invalidarCacheCadastros();
+        return jsonResponse({ success: true, message: 'Operação atualizada.' });
+      }
+    }
+    aba.appendRow([cod, nome, exigeQtd]);
+    invalidarCacheCadastros();
+    return jsonResponse({ success: true, message: 'Operação adicionada.' });
+  } catch (err) { return jsonResponse({ success: false, message: err.message }); }
+}
+
+function removerOperacao(payload) {
+  try {
+    const cod = String(payload.cod || '').trim().toUpperCase();
+    if (!cod) return jsonResponse({ success: false, message: 'Código obrigatório.' });
+
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = garantirAbaCadastro(ss, ABA_OPERACOES, ['Codigo', 'Nome', 'ExigeQtd']);
+    const dados = aba.getDataRange().getValues();
+    for (let i = dados.length-1; i >= 1; i--) {
+      if (String(dados[i][0]).trim().toUpperCase() === cod) {
+        aba.deleteRow(i+1);
+        invalidarCacheCadastros();
+        return jsonResponse({ success: true, message: 'Operação removida.' });
+      }
+    }
+    return jsonResponse({ success: false, message: 'Operação não encontrada.' });
   } catch (err) { return jsonResponse({ success: false, message: err.message }); }
 }
 
@@ -835,6 +902,7 @@ function setup() {
   garantirAbaSaldo(ss);
   garantirAbaCadastro(ss, ABA_OPERADORES, ['Codigo','Nome','Ativo']);
   garantirAbaCadastro(ss, ABA_SERIES,     ['NrSerie','Implemento','Cliente','Ativo']);
+  garantirAbaCadastro(ss, ABA_OPERACOES,  ['Codigo','Nome','ExigeQtd']);
 
   const abaOp = ss.getSheetByName(ABA_OPERADORES);
   if (abaOp.getLastRow() <= 1) {
