@@ -304,6 +304,37 @@ input[type="date"]{color-scheme:dark;}
   </div>
 </div>
 
+<!-- MODAL: Registrar Abertura Retroativa -->
+<div class="fcm-overlay" id="abmOverlay">
+  <div class="fcm-box">
+    <div class="fcm-title" style="color:var(--accent2)">📋 Registrar Abertura Retroativa</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:12px;background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.2);border-radius:6px;padding:8px 12px;">
+      Este fechamento não tem abertura correspondente. Registre a abertura com a data/hora correta em que o operador iniciou o trabalho.
+    </div>
+    <div class="fcm-info" id="abmInfo"></div>
+    <div class="fcm-row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div>
+        <label>Data da Abertura</label>
+        <input type="date" id="abmData" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:14px;font-family:'Barlow',sans-serif;outline:none;transition:border-color .2s;" onfocus="this.style.borderColor='var(--accent2)'" onblur="this.style.borderColor='var(--border)'">
+      </div>
+      <div>
+        <label>Hora da Abertura</label>
+        <input type="time" id="abmHora" step="60" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:14px;font-family:'Barlow',sans-serif;outline:none;transition:border-color .2s;" onfocus="this.style.borderColor='var(--accent2)'" onblur="this.style.borderColor='var(--border)'">
+      </div>
+    </div>
+    <div class="fcm-row">
+      <label>Observação</label>
+      <input type="text" id="abmObs" value="Abertura registrada retroativamente pelo líder" maxlength="120"
+        style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;font-family:'Barlow',sans-serif;outline:none;">
+    </div>
+    <div class="fcm-err" id="abmErr"></div>
+    <div class="fcm-btns">
+      <button class="btn-fcm-ok" id="abmBtnOk" style="background:var(--accent2);color:#000;" onclick="confirmarAberturaRetroativa()">📋 REGISTRAR ABERTURA</button>
+      <button class="btn-fcm-cancel" onclick="fecharModalAbertura()">Cancelar</button>
+    </div>
+  </div>
+</div>
+
 <div class="loading-overlay" id="loadingOverlay">
   <div class="loading-spinner"></div>
   <div class="loading-text">CARREGANDO DADOS</div>
@@ -1311,6 +1342,39 @@ function tsToDateStr(ts){ if(!ts) return ''; return ts.slice(0,10).replace(/\//g
 // Match ABERTURA → FECHAMENTO by best score (func + op + serie + item)
 // Same for INÍCIO DE PARADA → TÉRMINO DE PARADA
 // Same for INÍCIO DE RETRABALHO → TÉRMINO DE RETRABALHO
+
+// ── Normalização de código de operador ────────────────────────────────────────
+// Extrai o código numérico do campo func ("000130 - NOME" ou "130 — NOME")
+// e retorna em formato canônico 6 dígitos ("000130").
+// Isso garante que registros antigos (Forms, "000130 - NOME") sejam comparados
+// corretamente com registros novos (app, "130 — NOME" ou "000130 — NOME").
+function funcCodeNorm(funcStr) {
+  const raw  = String(funcStr || '').trim();
+  // Separa pelo primeiro separador (hífen, travessão, espaço) — pega só o código
+  const code = raw.split(/[\s\-—]+/)[0].trim();
+  const n    = Number(code);
+  if (!isNaN(n) && n > 0) return String(n).padStart(6, '0');
+  return code; // ex: "EXTERNO" ou qualquer código não numérico
+}
+function sameFunc(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return funcCodeNorm(a) === funcCodeNorm(b);
+}
+// Extrai nome legível de operador de qualquer formato:
+// "000130 - EDERSON LUIS" → "EDERSON LUIS"
+// "000130 — EDERSON LUIS" → "EDERSON LUIS"
+// "EDERSON" → "EDERSON"  (sem código)
+function funcName(funcStr) {
+  const s = String(funcStr || '').trim();
+  const parts = s.split(/\s*[-—]\s*/);
+  // Se o primeiro token parece um código numérico, descarta
+  if (parts.length > 1 && /^\d+$/.test(parts[0])) {
+    return parts.slice(1).join(' - ') || s;
+  }
+  return s;
+}
+
 function pairRows(rows, openType, closeType){
   const pairs = [];
   const opens = [];
@@ -1323,7 +1387,7 @@ function pairRows(rows, openType, closeType){
       for(let i=0;i<opens.length;i++){
         const o=opens[i];
         if(o._used) continue;
-        if(o.func !== r.func) continue;
+        if(!sameFunc(o.func, r.func)) continue;
         if(tsToDate(o.ts) > rTs) continue;
         let score = 1;
         if(o.op === r.op) score += 4;
@@ -1368,7 +1432,7 @@ function populateFilters(prevFunc='',prevSerie='',prevOp='',prevItem='',prevFrom
     arr.forEach(v=>{const o=document.createElement('option');o.value=v;o.text=labelFn?labelFn(v):v;sel.appendChild(o);});
     if(prev&&arr.includes(prev))sel.value=prev;
   }
-  fill('fFunc', funcs, v=>v.split(' - ').slice(1).join(' ')||v, prevFunc);
+  fill('fFunc', funcs, v=>funcName(v), prevFunc);
   fill('fSerie', series, null, prevSerie);
   fill('fOp', ops, null, prevOp);
   fill('fItem', items, null, prevItem);
@@ -1559,16 +1623,16 @@ function renderFuncs(){
 
   // Track unique active days per func (for individual capacity)
   prod.forEach(p=>{
-    if(!fm[p.func]) fm[p.func]={name:p.func.split(' - ').slice(1).join(' '),code:p.func.split(' - ')[0],prod:0,par:0,ret:0,ops:0,days:new Set()};
+    if(!fm[p.func]) fm[p.func]={name:funcName(p.func),code:funcCodeNorm(p.func),prod:0,par:0,ret:0,ops:0,days:new Set()};
     fm[p.func].prod+=p.dur; fm[p.func].ops++;
     if(p.openTs) fm[p.func].days.add(p.openTs.slice(0,10));
   });
   para.forEach(p=>{
-    if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:r?.func.split(' - ').slice(1).join(' ')||p.func,code:r?.func.split(' - ')[0]||'',prod:0,par:0,ret:0,ops:0,days:new Set()};}
+    if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:funcName(r?.func||p.func),code:funcCodeNorm(r?.func||''),prod:0,par:0,ret:0,ops:0,days:new Set()};}
     fm[p.func].par+=p.dur;
   });
   retrab.forEach(p=>{
-    if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:r?.func.split(' - ').slice(1).join(' ')||p.func,code:r?.func.split(' - ')[0]||'',prod:0,par:0,ret:0,ops:0,days:new Set()};}
+    if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:funcName(r?.func||p.func),code:funcCodeNorm(r?.func||''),prod:0,par:0,ret:0,ops:0,days:new Set()};}
     fm[p.func].ret+=p.dur;
   });
 
@@ -1868,7 +1932,7 @@ function renderRanking(){
   const pairs=pairRows(filtered,'ABERTURA','FECHAMENTO');
   const fm={};
   pairs.forEach(p=>{
-    const name=p.func.split(' - ').slice(1).join(' ')||p.func;
+    const name=funcName(p.func);
     if(!fm[name]) fm[name]=0;
     fm[name]+=p.dur;
   });
@@ -1901,7 +1965,7 @@ function renderTimeline(){
     const ts=tsToDate(r.ts);
     const time=ts.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
     const date=ts.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
-    const name=r.func.split(' - ').slice(1).join(' ')||r.func;
+    const name=funcName(r.func);
     const detail=[r.op,r.item,r.serie&&r.serie[0]>='0'?r.serie:''].filter(Boolean).join(' · ');
     html+=`<div class="tl-item">
       <div class="tl-dot" style="background:${c}"></div>
@@ -2078,15 +2142,13 @@ function renderAlerts(){
     const cap = days * 8 * 60;
     const ee = Math.min(100, tp/cap*100);
     if(ee < 70){
-      const name = func.split(' - ').slice(1).join(' ')||func;
+      const name = funcName(func);
       alerts.push({level:'danger', msg:`EE de <b>${name}</b> está em <b>${ee.toFixed(0)}%</b> — abaixo do limite de 70% (capacidade: ${days}d×8h)`});
     }
   });
 
-  // Alert 2: Backlog — compara ABERTURAs vs pares concluídos
-  const totalAberturas = filtered.filter(r=>r.tipo==='ABERTURA').length;
-  const totalFechados  = prod.length; // pares válidos já calculados
-  const backlogCount   = Math.max(0, totalAberturas - totalFechados);
+  // Alert 2: Backlog — algoritmo two-pass sobre RAW_DATA (mesmo do painel de backlog)
+  const backlogCount = computeOpenOrders().length;
   if(backlogCount > 0){
     alerts.push({level:'warn', msg:`<b>${backlogCount}</b> ABERTURA(s) sem fechamento correspondente (backlog)`});
   }
@@ -2108,7 +2170,7 @@ function renderAlerts(){
   });
   Object.entries(funcParaTipo).forEach(([func, v]) => {
     if(v.total > 120 && v.sist/v.total > 0.5){
-      const name = func.split(' - ').slice(1).join(' ')||func;
+      const name = funcName(func);
       alerts.push({level:'info', msg:`<b>${name}</b> tem ${(v.sist/v.total*100).toFixed(0)}% das paradas por causas sistêmicas — verificar planejamento`});
     }
   });
@@ -2388,7 +2450,7 @@ function renderPvByFunc(){
   const prod = pairRows(filtered,'ABERTURA','FECHAMENTO');
   const fmap = {};
   prod.forEach(p => {
-    if(!fmap[p.func]) fmap[p.func]={name:p.func.split(' - ').slice(1).join(' ')||p.func, real_min:0, est_min:0, n:0};
+    if(!fmap[p.func]) fmap[p.func]={name:funcName(p.func), real_min:0, est_min:0, n:0};
     fmap[p.func].real_min += p.dur;
     fmap[p.func].n++;
     const nc = normCode(p.item||'');
@@ -2683,8 +2745,8 @@ function getAbsenceData(){
     const present   = funcPresent[func] || new Set();
     const absentDays  = openDays.filter(d => !present.has(d));
     const presentDays = openDays.filter(d =>  present.has(d));
-    const name = func.split(' - ').slice(1).join(' ') || func;
-    const code = func.split(' - ')[0] || '';
+    const name = funcName(func);
+    const code = funcCodeNorm(func) || '';
     const attPct = totalOpen > 0 ? Math.round(presentDays.length / totalOpen * 100) : 100;
     return { func, name, code, totalOpen, presentDays: presentDays.length, absentDays, attPct, absentH: absentDays.length * 8 };
   });
@@ -2810,10 +2872,10 @@ function renderChart(cardId) {
     });
 
     const fm={};
-    pairs.forEach(p=>{if(!fm[p.func])fm[p.func]={name:p.func.split(' - ').slice(1).join(' '),prod:0,par:0,ret:0,abs:0};fm[p.func].prod+=p.dur;});
-    para.forEach(p=>{if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:r?.func.split(' - ').slice(1).join(' ')||p.func,prod:0,par:0,ret:0,abs:0};}fm[p.func].par+=p.dur;});
-    retrab.forEach(p=>{if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:r?.func.split(' - ').slice(1).join(' ')||p.func,prod:0,par:0,ret:0,abs:0};}fm[p.func].ret+=p.dur;});
-    absF.forEach(a=>{if(!fm[a.func]){const r=RAW_DATA.find(r=>r.func===a.func);fm[a.func]={name:r?.func.split(' - ').slice(1).join(' ')||a.func,prod:0,par:0,ret:0,abs:0};}fm[a.func].abs+=8*60;});
+    pairs.forEach(p=>{if(!fm[p.func])fm[p.func]={name:funcName(p.func),prod:0,par:0,ret:0,abs:0};fm[p.func].prod+=p.dur;});
+    para.forEach(p=>{if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:funcName(r?.func||p.func),prod:0,par:0,ret:0,abs:0};}fm[p.func].par+=p.dur;});
+    retrab.forEach(p=>{if(!fm[p.func]){const r=RAW_DATA.find(r=>r.func===p.func);fm[p.func]={name:funcName(r?.func||p.func),prod:0,par:0,ret:0,abs:0};}fm[p.func].ret+=p.dur;});
+    absF.forEach(a=>{if(!fm[a.func]){const r=RAW_DATA.find(r=>r.func===a.func);fm[a.func]={name:funcName(r?.func||a.func),prod:0,par:0,ret:0,abs:0};}fm[a.func].abs+=8*60;});
 
     const sorted=Object.values(fm).sort((a,b)=>b.prod-a.prod);
     const labels=sorted.map(v=>v.name.split(' ')[0]+' '+v.name.split(' ')[1]);
@@ -2859,7 +2921,7 @@ function renderChart(cardId) {
   } else if(cardId === 'rank') {
     const pairs=pairRows(filtered,'ABERTURA','FECHAMENTO');
     const fm={};
-    pairs.forEach(p=>{const n=p.func.split(' - ').slice(1).join(' ')||p.func;if(!fm[n])fm[n]=0;fm[n]+=p.dur;});
+    pairs.forEach(p=>{const n=funcName(p.func);if(!fm[n])fm[n]=0;fm[n]+=p.dur;});
     const sorted=Object.entries(fm).sort((a,b)=>b[1]-a[1]);
     const labels=sorted.map(([n])=>n.split(' ')[0]+' '+n.split(' ')[1]);
     chartInstances[cardId]=new Chart(ctx,{
@@ -2967,15 +3029,9 @@ function renderExtraKPIs(){
   const el_tr = document.getElementById('k-taxa-ret');
   if(el_tr) el_tr.textContent = taxaRet.toFixed(1)+'%';
 
-  // Backlog: ABERTURAs sem FECHAMENTO
-  const opens={}, backlog=[];
-  filtered.forEach(r=>{
-    const k=r.func+'||'+r.op+'||'+r.item+'||'+r.serie;
-    if(r.tipo==='ABERTURA') opens[k]=(opens[k]||0)+1;
-    else if(r.tipo==='FECHAMENTO') opens[k]=(opens[k]||0)-1;
-  });
-  let backlogCount=0;
-  Object.values(opens).forEach(v=>{if(v>0)backlogCount+=v;});
+  // Backlog: ABERTURAs sem FECHAMENTO — usa o mesmo algoritmo two-pass do painel de backlog
+  // computeOpenOrders() opera sobre RAW_DATA completo (sem filtro de período) para consistência
+  const backlogCount = computeOpenOrders().length;
   const el_bl = document.getElementById('k-backlog');
   if(el_bl) el_bl.textContent = backlogCount;
 
@@ -3150,7 +3206,7 @@ function renderBacklog(){
         <th style="text-align:center">Fechar</th>
       </tr></thead>
       <tbody>${_computedBacklog.map((r,idx)=>{
-        const nome=r.func.split(' - ').slice(1).join(' ')||r.func;
+        const nome=r.func.split(/\s*[-—]\s*/).slice(1).join(' ')||r.func;
         const serie=r.serie||r.impl||'—';
         const tsFormatted=r.ts?r.ts.replace(/(\d{4})\/(\d{2})\/(\d{2})\s/,'$3/$2/$1 '):'—';
         return `<tr>
@@ -3414,10 +3470,47 @@ function renderProjects(){
 
 // ── FIM INDICADORES ESTRATÉGICOS ─────────────────────────────────────────────
 
-// ── FECHAR APONTAMENTO ────────────────────────────────────────────────────────
+// ── FECHAR / REGISTRAR ABERTURA RETROATIVA ───────────────────────────────────
 // Fonte de verdade: RAW_DATA (cobre Forms antigo + novo app)
 
 let _computedBacklog = [];
+
+// ── Motor de pareamento two-pass (fonte de verdade canônica) ─────────────────
+// Retorna { openOrders, orphanFechamentos }
+// openOrders      = ABERTURAs sem FECHAMENTO correspondente
+// orphanFechamentos = FECHAMENTOs sem ABERTURA correspondente
+function computePairingTruth(){
+  const opens = [];
+  RAW_DATA.forEach(r => {
+    if(r.tipo === 'ABERTURA') opens.push({...r, _used:false});
+  });
+  const orphanFech = [];
+  RAW_DATA.forEach(r => {
+    if(r.tipo !== 'FECHAMENTO') return;
+    const rTs = tsToDate(r.ts);
+    let best=null, bestScore=-1;
+    for(let i=0;i<opens.length;i++){
+      const o=opens[i];
+      if(o._used) continue;
+      if(!sameFunc(o.func, r.func)) continue;
+      if(tsToDate(o.ts) > rTs) continue;
+      let score=1;
+      if(o.op === r.op)     score+=4;
+      if(o.serie === r.serie) score+=2;
+      if(o.item === r.item)  score+=1;
+      if(score > bestScore){ bestScore=score; best=i; }
+    }
+    if(best!==null){
+      opens[best]._used=true;
+    } else {
+      orphanFech.push(r);
+    }
+  });
+  return {
+    openOrders: opens.filter(o=>!o._used).sort((a,b)=>b.ts.localeCompare(a.ts)),
+    orphanFechamentos: orphanFech
+  };
+}
 
 function computeOpenOrders(){
   // Roda em RAW_DATA completo (ignora filtro de período)
@@ -3432,7 +3525,7 @@ function computeOpenOrders(){
     for(let i=0;i<opens.length;i++){
       const o=opens[i];
       if(o._used) continue;
-      if(o.func !== r.func) continue;
+      if(!sameFunc(o.func, r.func)) continue;
       if(tsToDate(o.ts) > rTs) continue;
       let score=1;
       if(o.op === r.op)     score+=4;
@@ -3450,7 +3543,7 @@ function abrirModalFechar(idx){
   if(idx>=_computedBacklog.length) return;
   _fcmIdx=idx;
   const r=_computedBacklog[idx];
-  const nome=r.func.split(' - ').slice(1).join(' ')||r.func;
+  const nome=funcName(r.func);
   const serie=r.serie||r.impl||'—';
   const tsFormatted=r.ts?r.ts.replace(/(\d{4})\/(\d{2})\/(\d{2})\s/,'$3/$2/$1 '):'—';
   document.getElementById('fcmInfo').innerHTML=`
@@ -3513,8 +3606,11 @@ async function confirmarFechamento(){
   btnOk.disabled=true;
   errEl.textContent='Enviando…';
 
-  // Extrai código do operador (formato "000101 - NOME")
-  const operCod=r.func.split(' - ')[0]||r.func;
+  // Extrai código normalizado do operador (ex: "000130" a partir de "000130 - NOME" ou "130 — NOME")
+  const operCod = funcCodeNorm(r.func) || r.func.split(/[\s\-—]+/)[0] || r.func;
+
+  // Usa o abertoId da abertura se disponível (campo _abertoId injetado ao montar o backlog)
+  const abertoId = r._abertoId || '';
 
   const payload={
     tipoApontamento:'FECHAMENTO',
@@ -3529,7 +3625,7 @@ async function confirmarFechamento(){
     quantidade:qtd,
     obs1:obs,
     timestamp:carimbo,
-    abertoId:'' // registros do Forms antigo não têm abertoId
+    abertoId: abertoId,
   };
 
   try{
@@ -3550,9 +3646,108 @@ async function confirmarFechamento(){
   }
 }
 
-document.addEventListener('keydown',e=>{if(e.key==='Escape') fecharModal();});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ fecharModal(); fecharModalAbertura(); }
+});
 
 // ── FIM FECHAR APONTAMENTO ────────────────────────────────────────────────────
+
+// ── REGISTRAR ABERTURA RETROATIVA ────────────────────────────────────────────
+let _abmRecord = null; // FECHAMENTO orphan que originou o pedido
+
+function abrirModalAbertura(r){
+  _abmRecord = r;
+  const nome = funcName(r.func);
+  const serie = r.serie || r.impl || '—';
+  const tsFech = r.ts ? r.ts.replace(/(\d{4})\/(\d{2})\/(\d{2})\s/,'$3/$2/$1 ') : '—';
+
+  document.getElementById('abmInfo').innerHTML = `
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Funcionário</div><div class="fcm-fld-val">${nome}</div></div>
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Operação</div><div class="fcm-fld-val">${r.op||'—'}</div></div>
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Cód. Item</div><div class="fcm-fld-val" style="color:var(--accent2)">${r.item||'—'}</div></div>
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Nº Série</div><div class="fcm-fld-val">${serie}</div></div>
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Qtd Planejada</div><div class="fcm-fld-val" style="color:var(--accent)">${r.qty||'—'}</div></div>
+    <div class="fcm-fld"><div class="fcm-fld-lbl">Fechamento ref.</div><div class="fcm-fld-val" style="font-size:11px;color:var(--warn)">${tsFech}</div></div>`;
+
+  // Sugestão: 30 min antes do fechamento
+  const dtFech = tsToDate(r.ts);
+  const dtSug = new Date(dtFech.getTime() - 30*60000);
+  const pad = n => String(n).padStart(2,'0');
+  document.getElementById('abmData').value = `${dtSug.getFullYear()}-${pad(dtSug.getMonth()+1)}-${pad(dtSug.getDate())}`;
+  document.getElementById('abmHora').value = `${pad(dtSug.getHours())}:${pad(dtSug.getMinutes())}`;
+  document.getElementById('abmObs').value = 'Abertura registrada retroativamente pelo líder';
+  document.getElementById('abmErr').textContent = '';
+  document.getElementById('abmErr').style.color = '';
+  document.getElementById('abmBtnOk').disabled = false;
+  document.getElementById('abmOverlay').classList.add('open');
+  setTimeout(()=>document.getElementById('abmData').focus(), 120);
+}
+
+function fecharModalAbertura(){
+  document.getElementById('abmOverlay').classList.remove('open');
+  _abmRecord = null;
+}
+
+async function confirmarAberturaRetroativa(){
+  if(!_abmRecord) return;
+  const r = _abmRecord;
+  const dataVal = document.getElementById('abmData').value;
+  const horaVal = document.getElementById('abmHora').value;
+  const obs     = document.getElementById('abmObs').value.trim();
+  const errEl   = document.getElementById('abmErr');
+  const btnOk   = document.getElementById('abmBtnOk');
+
+  if(!dataVal){ errEl.textContent='Informe a data da abertura.'; return; }
+  if(!horaVal){ errEl.textContent='Informe a hora da abertura.'; return; }
+
+  const [fAno,fMes,fDia] = dataVal.split('-');
+  const tsAbertura = new Date(`${fAno}-${fMes}-${fDia}T${horaVal}:00`);
+  const tsFechamento = tsToDate(r.ts);
+
+  if(tsAbertura >= tsFechamento){
+    errEl.textContent='A abertura deve ser anterior ao fechamento (' + r.ts.replace(/(\d{4})\/(\d{2})\/(\d{2})\s/,'$3/$2/$1 ') + ').';
+    return;
+  }
+
+  const carimbo = `${fDia}/${fMes}/${fAno} ${horaVal}:00`;
+  const operCod = funcCodeNorm(r.func) || r.func.split(/[\s\-—]+/)[0] || r.func;
+
+  const payload = {
+    tipoApontamento: 'ABERTURA',
+    operador:        operCod,
+    operadorNome:    r.func,
+    implemento:      r.impl || '',
+    nrSerie:         r.serie || '',
+    cliente:         r.client || '',
+    operacao:        r.op || '',
+    codItem:         r.item || '',
+    qtdPlanejada:    r.qty || '',
+    quantidade:      '',
+    obs1:            obs || 'Abertura registrada retroativamente pelo líder',
+    timestamp:       carimbo,
+    abertoId:        ''
+  };
+
+  btnOk.disabled = true;
+  errEl.textContent = 'Enviando…';
+
+  try{
+    const url = APONTAMENTO_URL + '?payload=' + encodeURIComponent(JSON.stringify(payload)) + '&_=' + Date.now();
+    const resp = await fetch(url);
+    const json = await resp.json();
+    if(!json.success) throw new Error(json.message || 'Erro desconhecido');
+    errEl.style.color = 'var(--accent3)';
+    errEl.textContent = '✔ Abertura registrada com sucesso!';
+    setTimeout(()=>{
+      fecharModalAbertura();
+      renderAudit3(); // recarrega inconsistências
+    }, 1800);
+  } catch(err){
+    errEl.textContent = 'Erro: ' + err.message;
+    btnOk.disabled = false;
+  }
+}
+// ── FIM REGISTRAR ABERTURA RETROATIVA ────────────────────────────────────────
 
 function renderWeekday(){
   if(!document.getElementById('sec-weekday')||document.getElementById('sec-weekday').style.display==='none') return;
@@ -3621,7 +3816,7 @@ function populateAuditFilters() {
     funcs.forEach(f => {
       const o = document.createElement('option');
       o.value = f;
-      o.text = f.split(' - ').slice(1).join(' ') || f;
+      o.text = funcName(f);
       sel.appendChild(o);
     });
     if (prev && funcs.includes(prev)) sel.value = prev;
@@ -3681,7 +3876,7 @@ function renderAudit1() {
     if (openDay !== closeDay) warn += '🌙 vira-dia ';
 
     const rowBg = warn ? 'background:rgba(248,113,113,.05)' : '';
-    const name = p.func.split(' - ').slice(1).join(' ') || p.func;
+    const name = funcName(p.func) || p.func;
 
     html += `<tr style="${rowBg}">
       <td style="color:var(--text3)">${i+1}</td>
@@ -3707,7 +3902,7 @@ function renderAudit2() {
   if (!func) { cont.innerHTML = '<div class="empty">Selecione um funcionário</div>'; return; }
 
   const rows = filtered.filter(r => r.func === func);
-  const name = func.split(' - ').slice(1).join(' ') || func;
+  const name = funcName(func);
 
   const prod   = pairRows(rows, 'ABERTURA', 'FECHAMENTO');
   const parada = pairRows(rows, 'INÍCIO DE PARADA', 'TÉRMINO DE PARADA');
@@ -3794,21 +3989,20 @@ function renderAudit3() {
 
   const issues = [];
 
-  // 1. ABERTURAs sem FECHAMENTO — usa RAW_DATA completo para o pareamento
-  // (igual ao computeOpenOrders) para evitar falsos positivos quando o FECHAMENTO
-  // existe mas cai fora do intervalo de datas selecionado no filtro.
-  // Só reporta ABERTURAs que estejam dentro do período filtrado.
-  const allPairsAudit = pairRows(RAW_DATA,'ABERTURA','FECHAMENTO');
-  // Encontra ABERTURAs que não foram pareadas
-  const pairedOpenTs = new Set(allPairsAudit.map(p => p.func+'||'+p.openTs));
+  // 1. ABERTURAs sem FECHAMENTO — usa motor two-pass (mesma lógica do backlog)
+  // para garantir contagem idêntica ao painel de ordens abertas.
+  const { openOrders: _openOrds, orphanFechamentos: _orphanFechs } = computePairingTruth();
+  const openOrdKeys = new Set(_openOrds.map(r => r.func+'||'+r.ts));
+  // Só reporta ABERTURAs dentro do intervalo filtrado
   filtered.filter(r=>r.tipo==='ABERTURA').forEach(r=>{
     const key = r.func+'||'+r.ts;
-    if(!pairedOpenTs.has(key)){
-      const name = r.func.split(' - ').slice(1).join(' ') || r.func;
+    if(openOrdKeys.has(key)){
+      const name = funcName(r.func);
       const dt = tsToDate(r.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
       issues.push({ type:'backlog', sev:'alta', icon:'🔴',
         desc:'Abertura sem fechamento correspondente',
-        detail:`${name} | ${r.op||'—'} | Item: ${r.item||'—'} | Série: ${r.serie&&r.serie[0]>='0'?r.serie:'—'} | ${dt}` });
+        detail:`${name} | ${r.op||'—'} | Item: ${r.item||'—'} | Série: ${r.serie&&r.serie[0]>='0'?r.serie:'—'} | ${dt}`,
+        raw: r });
     }
   });
 
@@ -3819,7 +4013,7 @@ function renderAudit3() {
     ...pairRows(filtered,'INÍCIO DE RETRABALHO','TÉRMINO DE RETRABALHO'),
   ];
   allPairs.forEach(p => {
-    const name = p.func.split(' - ').slice(1).join(' ') || p.func;
+    const name = funcName(p.func) || p.func;
     if (p.dur > 600) {
       issues.push({ type: 'duracao', sev: 'media', icon: '🟠',
         desc: `Duração muito longa: ${fmtH(p.dur)}`,
@@ -3841,7 +4035,7 @@ function renderAudit3() {
       const a = recs[i], b = recs[i+1];
       const diffMin = (tsToDate(b.ts) - tsToDate(a.ts)) / 60000;
       if (diffMin < 2 && a.op !== b.op) {
-        const name = func.split(' - ').slice(1).join(' ') || func;
+        const name = funcName(func);
         issues.push({ type: 'simultaneo', sev: 'media', icon: '🟠',
           desc: 'Possível apontamento simultâneo (< 2 min entre aberturas)',
           detail: `${name} | ${tsToDate(a.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} | ${a.op||'—'} e ${b.op||'—'}` });
@@ -3849,16 +4043,18 @@ function renderAudit3() {
     }
   });
 
-  // 4. FECHAMENTO sem ABERTURA — detecta fechamentos que pairRows não conseguiu parear
-  const pairedCloseTs = new Set(allPairsAudit.map(p => p.func+'||'+p.closeTs));
+  // 4. FECHAMENTO sem ABERTURA — usa motor two-pass para detecção confiável.
+  // Só reporta FECHAMENTOs dentro do intervalo filtrado.
+  const orphanFechKeys = new Set(_orphanFechs.map(r => r.func+'||'+r.ts));
   filtered.filter(r=>r.tipo==='FECHAMENTO').forEach(r=>{
     const key = r.func+'||'+r.ts;
-    if(!pairedCloseTs.has(key)){
-      const name = r.func.split(' - ').slice(1).join(' ') || r.func;
+    if(orphanFechKeys.has(key)){
+      const name = funcName(r.func);
       const dt = tsToDate(r.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-      issues.push({ type:'orphan', sev:'baixa', icon:'🟡',
+      issues.push({ type:'orphan', sev:'media', icon:'🟠',
         desc:'Fechamento sem abertura correspondente',
-        detail:`${name} | ${r.op||'—'} | ${dt}` });
+        detail:`${name} | ${r.op||'—'} | Item: ${r.item||'—'} | Série: ${r.serie&&r.serie[0]>='0'?r.serie:'—'} | ${dt}`,
+        raw: r });
     }
   });
 
@@ -3903,13 +4099,21 @@ function renderAudit3() {
       if (!g.items.length) return;
       html += `<div style="margin-bottom:14px">
         <div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border)">${g.label} (${g.items.length})</div>`;
-      g.items.forEach(i => {
-        html += `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);margin-bottom:5px;background:var(--surface2)">
+      g.items.forEach((i,idx) => {
+        const btnAbertura = (i.type==='orphan' && i.raw)
+          ? `<button onclick='abrirModalAbertura(${JSON.stringify(i.raw).replace(/'/g,"&#39;")})'
+               style="margin-left:auto;flex-shrink:0;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.35);color:var(--accent2);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:'Barlow Condensed',sans-serif;white-space:nowrap;transition:all .15s"
+               onmouseover="this.style.background='rgba(56,189,248,.22)'" onmouseout="this.style.background='rgba(56,189,248,.12)'">
+               + Registrar Abertura
+             </button>`
+          : '';
+        html += `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;border:1px solid var(--border);margin-bottom:5px;background:var(--surface2)">
           <span style="font-size:14px;flex-shrink:0">${i.icon}</span>
-          <div>
+          <div style="flex:1;min-width:0">
             <div style="font-size:12px;font-weight:600">${i.desc}</div>
             <div style="font-size:11px;color:var(--text2);margin-top:2px">${i.detail}</div>
           </div>
+          ${btnAbertura}
         </div>`;
       });
       html += '</div>';
@@ -3925,7 +4129,7 @@ function exportAuditCSV() {
   if (!pairs.length) return;
   const rows = [['#','Funcionário','Operação','Cód. Item','Série','Início','Fim','Duração (min)','Duração (h)','Alerta']];
   pairs.forEach((p, i) => {
-    const name = p.func.split(' - ').slice(1).join(' ') || p.func;
+    const name = funcName(p.func) || p.func;
     const fmt = ts => tsToDate(ts).toLocaleString('pt-BR');
     let warn = '';
     if (p.dur > 600) warn += '>10h ';
@@ -4178,7 +4382,7 @@ function renderPerformance() {
   const allFuncs = [...new Set(filtered.map(r=>r.func))].sort();
   const fmap = {};
   allFuncs.forEach(f => {
-    fmap[f] = {name:f.split(' - ').slice(1).join(' ')||f, code:f.split(' - ')[0]||'', durs:[], paraMins:0, retMins:0, byOp:{}};
+    fmap[f] = {name:funcName(f), code:funcCodeNorm(f)||'', durs:[], paraMins:0, retMins:0, byOp:{}};
   });
 
   prod.forEach(p => {
