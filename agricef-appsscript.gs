@@ -60,6 +60,7 @@ function doGet(e) {
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'getCadastros')     return getCadastros();
+  if (action === 'getData')          return getDadosRespostas();
   if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
     try {
       enviarRelatorioSemanal();
@@ -498,6 +499,49 @@ function getCadastros() {
 
 function invalidarCacheCadastros() {
   try { CacheService.getScriptCache().remove('cadastros_v2'); } catch(e) {}
+}
+
+// ================================================================
+// DADOS DA PLANILHA — lidos sempre frescos (sem cache de CacheService)
+// Chamado pelo dashboard via ?action=getData
+// Retorna array de objetos com os cabeçalhos da aba Respostas como chaves,
+// no mesmo formato que o script antigo de leitura retornava.
+// ================================================================
+function getDadosRespostas() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_RESPOSTAS);
+    if (!aba) return ContentService.createTextOutput('[]').setMimeType(ContentService.MimeType.JSON);
+
+    const dados    = aba.getDataRange().getValues();
+    if (dados.length < 2) return ContentService.createTextOutput('[]').setMimeType(ContentService.MimeType.JSON);
+
+    const cabecalhos = dados[0].map(c => String(c));
+    const registros  = [];
+
+    for (let i = 1; i < dados.length; i++) {
+      const row = dados[i];
+      // Pula linhas completamente vazias
+      if (!row[0] && !row[1]) continue;
+      const obj = {};
+      cabecalhos.forEach((col, j) => {
+        const val = row[j];
+        // Converte Date objects para string legível
+        if (val instanceof Date) {
+          obj[col] = Utilities.formatDate(val, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+        } else {
+          obj[col] = val === null || val === undefined ? '' : val;
+        }
+      });
+      registros.push(obj);
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify(registros))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput('[]').setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function salvarOperador(payload) {

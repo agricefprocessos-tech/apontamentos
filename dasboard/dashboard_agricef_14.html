@@ -1181,7 +1181,7 @@ function isParadaSistemica(tipoParada, tipoSetup){
 const APPS_SCRIPT_URL='https://script.google.com/macros/s/AKfycbxK4tqdjFkjQxJ-sAJ-VBeUL0In9LhMqKO0BBVWeuQj9t-DWdmjpPwF0rQNLID92r8OWg/exec';
 // Script clasp-managed (agricef-appsscript.gs) — getAbertos + gravarApontamento
 const APONTAMENTO_URL='https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
-const REFRESH_INTERVAL_MS=5*60*1000;
+const REFRESH_INTERVAL_MS=2*60*1000; // 2 min — reduzido para diminuir delay de aparecimento
 let RAW_DATA=[],ABSENCES=[],PLANT_OPEN_DAYS=[],ALL_WORKDAYS=[],filtered=[];
 let _refreshTimer=null,_lastUpdate=null;
 let _fcmIdx=null;
@@ -1277,7 +1277,9 @@ function computeAbsences(records){
 async function fetchData(){
   showLoadingState(true);
   try{
-    const resp=await fetch('https://script.google.com/macros/s/AKfycbxK4tqdjFkjQxJ-sAJ-VBeUL0In9LhMqKO0BBVWeuQj9t-DWdmjpPwF0rQNLID92r8OWg/exec'+'?_='+Date.now());
+    // Usa o mesmo script de apontamentos (deployment mais recente) para garantir dados frescos.
+    // O parâmetro ?_= quebra cache do browser; o action=getData evita a rota padrão cacheada.
+    const resp=await fetch(APONTAMENTO_URL+'?action=getData&_='+Date.now());
     if(!resp.ok) throw new Error('HTTP '+resp.status);
     const json=await resp.json();
     if(!Array.isArray(json)) throw new Error('Resposta inválida');
