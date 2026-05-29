@@ -119,6 +119,22 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'normalizarDatas' && e.parameter.key === 'AGF2026') {
+    try {
+      const total = normalizarDatasColA();
+      return jsonResponse({ success: true, message: total + ' data(s) normalizada(s) na coluna A.' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'normalizarTodos' && e.parameter.key === 'AGF2026') {
+    try {
+      const result = normalizarTodosDados();
+      return jsonResponse({ success: true, message: result.datas + ' data(s) + ' + result.operadores + ' operador(es) normalizados. Total: ' + result.total, detail: result });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'analyzeOrphans' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(analisarOrfaos());
@@ -1101,43 +1117,137 @@ function normalizarRespostasColB() {
   const lastRow = aba.getLastRow();
   if (lastRow < 2) { Logger.log('Nenhum registro a normalizar.'); return 0; }
 
-  // Leitura em lote — coluna B (índice 2 na planilha, 0 no array)
-  const colB = aba.getRange(2, 2, lastRow - 1, 1).getValues();
+  // Leitura em lote — coluna B
+  const range = aba.getRange(2, 2, lastRow - 1, 1);
+  const colB  = range.getValues();
   let corrigidos = 0;
 
   for (let i = 0; i < colB.length; i++) {
     const val = String(colB[i][0] === null || colB[i][0] === undefined ? '' : colB[i][0]).trim();
     if (!val) continue;
 
-    // Detecta separadores " - " (hífen) ou " — " (travessão) ou só dígitos
-    const mHifen = val.match(/^(\d+)\s*-\s*(.*)/s);
-    const mTravo = val.match(/^(\d+)\s*—\s*(.*)/s);
+    // Detecta separadores: " - " (hífen), " — " (travessão), " – " (meia-risca), ou só dígitos
+    const mHifen = val.match(/^(\d+)\s*[-–]\s*(.*)/s);   // hífen ou en-dash
+    const mTravo = val.match(/^(\d+)\s*—\s*(.*)/s);       // em-dash (correto)
     const mSo    = val.match(/^(\d+)$/);
 
-    let code, resto;
-    if      (mHifen) { code = mHifen[1]; resto = ' - ' + mHifen[2].trim(); }
-    else if (mTravo) { code = mTravo[1]; resto = ' — ' + mTravo[2].trim(); }
-    else if (mSo)    { code = mSo[1];   resto = ''; }
-    else continue; // não inicia com número → ignora
+    let code, nome;
+    if      (mHifen) { code = mHifen[1]; nome = mHifen[2].trim(); }
+    else if (mTravo) { code = mTravo[1]; nome = mTravo[2].trim(); }
+    else if (mSo)    { code = mSo[1];    nome = ''; }
+    else continue;
 
+    // Padrão novo do sistema: "CODE — NOME" (travessão em-dash, sem zeros à esquerda)
     const codeNorm = normalizarCodigoOp(code);
-    if (codeNorm !== code) {
-      const novoVal = codeNorm + resto;
+    const novoVal  = nome ? (codeNorm + ' — ' + nome) : codeNorm;
+
+    if (novoVal !== val) {
       colB[i][0] = novoVal;
       corrigidos++;
-      Logger.log('Respostas col B linha ' + (i + 2) + ': "' + val + '" → "' + novoVal + '"');
+      Logger.log('Col B linha ' + (i + 2) + ': "' + val + '" → "' + novoVal + '"');
     }
   }
 
   if (corrigidos > 0) {
-    // Força formato texto antes de gravar para preservar zeros à esquerda
-    const range = aba.getRange(2, 2, lastRow - 1, 1);
-    range.setNumberFormat('@');
+    range.setNumberFormat('@'); // força texto para preservar zeros se houver
     range.setValues(colB);
   }
 
-  Logger.log('✅ Respostas col B: ' + corrigidos + ' registro(s) normalizado(s).');
+  Logger.log('✅ Col B operadores: ' + corrigidos + ' registro(s) normalizado(s).');
   return corrigidos;
+}
+
+// ================================================================
+// NORMALIZAR COLUNA A (DATAS) — converte tudo para dd/MM/yyyy HH:mm:ss
+// Padrão do sistema novo (carimboBrowser).
+// Trata: Date objects, YYYY/MM/DD texto, string inglesa "Thu May..."
+// Execute via: ?action=normalizarDatas&key=AGF2026
+// ================================================================
+function normalizarDatasColA() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) { Logger.log('Aba Respostas não encontrada.'); return 0; }
+  const lastRow = aba.getLastRow();
+  if (lastRow < 2) { Logger.log('Nenhum registro a normalizar.'); return 0; }
+
+  const range = aba.getRange(2, 1, lastRow - 1, 1);
+  const colA  = range.getValues();
+  let corrigidos = 0;
+
+  const MESES_EN = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+
+  for (let i = 0; i < colA.length; i++) {
+    const val = colA[i][0];
+    if (val === null || val === undefined || val === '') continue;
+
+    let nova = null;
+
+    if (val instanceof Date) {
+      // Date object (Form response ou Sheets auto-convertido) → texto padrão
+      nova = Utilities.formatDate(val, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+
+    } else {
+      const s = String(val).trim();
+      if (!s) continue;
+
+      // Já está em dd/MM/yyyy — padrão correto, não muda
+      if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) continue;
+
+      // yyyy/MM/dd HH:mm:ss  →  dd/MM/yyyy HH:mm:ss
+      const mISO = s.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+      if (mISO) {
+        nova = mISO[3] + '/' + mISO[2] + '/' + mISO[1] + ' ' + mISO[4];
+      }
+
+      // yyyy/MM/dd (sem hora)
+      if (!nova) {
+        const mISOd = s.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+        if (mISOd) nova = mISOd[3] + '/' + mISOd[2] + '/' + mISOd[1] + ' 00:00:00';
+      }
+
+      // dd/MM/yyyy HH:mm (sem segundos) — complementa
+      if (!nova) {
+        const mPT = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2})$/);
+        if (mPT) nova = mPT[1] + '/' + mPT[2] + '/' + mPT[3] + ' ' + mPT[4] + ':00';
+      }
+
+      // String inglesa "Thu May 14 2026 12:15:07 GMT..."
+      if (!nova) {
+        const mEng = s.match(/\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+        if (mEng) {
+          const mes = MESES_EN[mEng[1]];
+          if (mes) {
+            nova = String(mEng[2]).padStart(2,'0') + '/' + String(mes).padStart(2,'0') + '/' + mEng[3] +
+                   ' ' + mEng[4] + ':' + mEng[5] + ':' + mEng[6];
+          }
+        }
+      }
+    }
+
+    if (nova) {
+      Logger.log('Col A linha ' + (i + 2) + ': "' + String(val).substring(0,30) + '" → "' + nova + '"');
+      colA[i][0] = nova;
+      corrigidos++;
+    }
+  }
+
+  if (corrigidos > 0) {
+    range.setNumberFormat('@'); // força texto — evita que Sheets re-interprete como Date
+    range.setValues(colA);
+  }
+
+  Logger.log('✅ Col A datas: ' + corrigidos + ' registro(s) normalizado(s).');
+  return corrigidos;
+}
+
+// ================================================================
+// NORMALIZAR TUDO — roda datas (col A) + operadores (col B) de uma vez
+// Execute via: ?action=normalizarTodos&key=AGF2026
+// ================================================================
+function normalizarTodosDados() {
+  const datas     = normalizarDatasColA();
+  const operadores = normalizarRespostasColB();
+  return { datas, operadores, total: datas + operadores };
 }
 
 function verificarEstrutura() {
