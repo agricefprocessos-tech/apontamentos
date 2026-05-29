@@ -135,6 +135,14 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'limparTestes' && e.parameter.key === 'AGF2026') {
+    try {
+      const total = limparRegistrosTeste();
+      return jsonResponse({ success: true, message: total + ' linha(s) de teste removida(s).' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'analyzeOrphans' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(analisarOrfaos());
@@ -300,17 +308,23 @@ function gravarApontamento(payload) {
     // VALIDAÇÃO DE COMPATIBILIDADE DE TIPO — garante que o fechamento
     // corresponde exatamente ao tipo de abertura em aberto.
     // Ex.: TERMINO_PARADA só pode fechar INÍCIO DE PARADA.
+    //
+    // Também valida:
+    //   • semAberto: bloqueia fechamento quando não há abertura em aberto
+    //   • serieIncompativel: bloqueia FECHAMENTO com nrSerie diferente da abertura
     // ---------------------------------------------------------------
     if (tiposFechamento.includes(tipo)) {
       const abertoIdPayload = String(payload.abertoId || '').trim();
+      let encontrou = false;
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue;
         const rowId   = String(dadosAbertos[i][12] || '').trim();
         const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
         const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
         if (matchId || matchOp) {
-          const tipoAberto     = String(dadosAbertos[i][2] || '').trim();
-          const tipoEsperado   = TIPO_COMPATIVEL[tipo];
+          encontrou = true;
+          const tipoAberto   = String(dadosAbertos[i][2] || '').trim();
+          const tipoEsperado = TIPO_COMPATIVEL[tipo];
           if (tipoEsperado && tipoAberto !== tipoEsperado) {
             return jsonResponse({
               success: false,
@@ -320,8 +334,35 @@ function gravarApontamento(payload) {
               tipoAberto: tipoAberto,
             });
           }
+          // Valida série apenas para FECHAMENTO (TERMINO_PARADA/RETRABALHO não têm série)
+          if (tipo === 'FECHAMENTO') {
+            const serieAberto      = String(dadosAbertos[i][7]  || '').trim();
+            const loteAberto       = String(dadosAbertos[i][11] || '').trim();
+            const serieFechamento  = String(payload.nrSerie || '').trim();
+            const loteFechamento   = payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
+            // Só valida quando a abertura tem série definida e não é lote
+            if (serieAberto && !loteAberto && !loteFechamento) {
+              if (serieFechamento && serieFechamento !== serieAberto) {
+                return jsonResponse({
+                  success: false,
+                  message: 'Série incompatível. A abertura foi feita para "' + serieAberto +
+                           '" mas o fechamento informou "' + serieFechamento + '".',
+                  serieIncompativel: true,
+                  serieAberto: serieAberto,
+                });
+              }
+            }
+          }
           break; // encontrou o registro — compatível → pode continuar
         }
+      }
+      // Bloqueia fechamento sem nenhuma abertura em aberto para o operador
+      if (!encontrou) {
+        return jsonResponse({
+          success: false,
+          message: 'Nenhum apontamento em aberto encontrado para este operador. Registre uma abertura antes de fechar.',
+          semAberto: true,
+        });
       }
     }
 
@@ -2668,5 +2709,31 @@ function marcarOrfaosLegado(cutoffStr) {
 
   aba.getRange(1, 14, dados.length, 1).setValues(colN);
   return { success: true, message: marcados + ' órfão(s) anteriores a ' + cutoffStr + ' marcados como [LEGADO].', marcados: marcados };
+}
+
+// ================================================================
+// LIMPAR REGISTROS DE TESTE — remove linhas com 'TESTE-AUTO' nas obs
+// Execute via: ?action=limparTestes&key=AGF2026
+// ================================================================
+function limparRegistrosTeste() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return 0;
+  const dados = aba.getDataRange().getValues();
+  const toDelete = [];
+  // Col H (índice 7) = obs1, Col N (índice 13) = obs2
+  for (let i = dados.length - 1; i >= 1; i--) {
+    const obs1 = String(dados[i][7]  || '');
+    const obs2 = String(dados[i][13] || '');
+    if (obs1.includes('TESTE-AUTO') || obs2.includes('TESTE-AUTO')) {
+      toDelete.push(i + 1); // número real da linha na planilha (base 1)
+    }
+  }
+  // Deletar de trás para frente para não deslocar índices
+  for (const row of toDelete) {
+    aba.deleteRow(row);
+  }
+  Logger.log('🧹 Registros de teste removidos: ' + toDelete.length);
+  return toDelete.length;
 }
 
