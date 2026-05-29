@@ -980,7 +980,7 @@ function getOpTargets(){
 function saveOpTarget(op,val){
   const t=getOpTargets();t[op]=parseFloat(val)||80;
   localStorage.setItem('agricef-op-targets',JSON.stringify(t));
-  renderMetaOp();
+  safeRender(renderAll,'renderAll');
 }
 const OP_CLASS={'0080 - INSPECIONAR':'auxiliar','0101 - TESTES':'auxiliar'};
 function getOpClass(op){return OP_CLASS[op]||'produtiva';}
@@ -1394,12 +1394,14 @@ function pairRows(rows, openType, closeType){
         if(o.op === r.op) score += 4;
         if(o.serie === r.serie) score += 2;
         if(o.item === r.item) score += 1;
-        if(score > bestScore){ bestScore=score; best=i; }
+        if(score > bestScore || (score === bestScore && best !== null && tsToDate(o.ts) > tsToDate(opens[best].ts))){
+          bestScore=score; best=i;
+        }
       }
       if(best!==null){
         const o=opens[best];
         const dur = workMinutes(tsToDate(o.ts), tsToDate(r.ts));
-        if(dur>0 && dur<4800){
+        if(dur>0){
           pairs.push({
             func:r.func, op:r.op||o.op,
             serie:r.serie||o.serie, impl:r.impl||o.impl, client:r.client||o.client,
@@ -3528,7 +3530,9 @@ function computePairingTruth(){
       if(o.op === r.op)     score+=4;
       if(o.serie === r.serie) score+=2;
       if(o.item === r.item)  score+=1;
-      if(score > bestScore){ bestScore=score; best=i; }
+      if(score > bestScore || (score === bestScore && best !== null && tsToDate(o.ts) > tsToDate(opens[best].ts))){
+        bestScore=score; best=i;
+      }
     }
     if(best!==null){
       opens[best]._used=true;
@@ -3561,7 +3565,9 @@ function computeOpenOrders(){
       if(o.op === r.op)     score+=4;
       if(o.serie === r.serie) score+=2;
       if(o.item === r.item)  score+=1;
-      if(score > bestScore){ bestScore=score; best=i; }
+      if(score > bestScore || (score === bestScore && best !== null && tsToDate(o.ts) > tsToDate(opens[best].ts))){
+        bestScore=score; best=i;
+      }
     }
     if(best!==null) opens[best]._used=true;
   });
