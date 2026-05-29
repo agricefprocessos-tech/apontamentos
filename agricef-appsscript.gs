@@ -119,6 +119,22 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'analyzeOrphans' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(analisarOrfaos());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'marcarLegado' && e.parameter.key === 'AGF2026') {
+    try {
+      const cutoff = e.parameter.cutoff || '';
+      const result = marcarOrfaosLegado(cutoff);
+      return jsonResponse(result);
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
 
   // Ações via payload GET (contorna CORS)
   if (e.parameter.payload) {
@@ -1260,7 +1276,10 @@ function _rsMontarRelatorio() {
         if (a.op    === fech.op)    score += 4;
         if (a.serie === fech.serie) score += 2;
         if (a.item  === fech.item)  score += 1;
-        if (score > melhorScore) { melhorScore = score; melhor = i; }
+        // Empate: prefere a ABERTURA mais recente (mais próxima do FECHAMENTO)
+        if (score > melhorScore || (score === melhorScore && melhor !== null && a.ts > aberturas[melhor].ts)) {
+          melhorScore = score; melhor = i;
+        }
       }
       if (melhor !== null) {
         aberturas[melhor]._used   = true;
@@ -1831,7 +1850,10 @@ function _rdMontarRelatorio() {
         if (a.op    === fech.op)    score += 4;
         if (a.serie === fech.serie) score += 2;
         if (a.item  === fech.item)  score += 1;
-        if (score > melhorScore) { melhorScore = score; melhor = i; }
+        // Empate: prefere a ABERTURA mais recente (mais próxima do FECHAMENTO)
+        if (score > melhorScore || (score === melhorScore && melhor !== null && a.ts > aberturas[melhor].ts)) {
+          melhorScore = score; melhor = i;
+        }
       }
       if (melhor !== null) {
         aberturas[melhor]._used   = true;
@@ -2241,5 +2263,270 @@ function _rdEnviarEmail(rel) {
     subject:  '⚡ AGRICEF | Relatório Diário — ' + dataStr,
     htmlBody: html,
   });
+}
+
+// ================================================================
+// ANÁLISE DE ÓRFÃOS (ABERTURAs sem FECHAMENTO correspondente)
+// Execute via: ?action=analyzeOrphans&key=AGF2026
+// ================================================================
+function analisarOrfaos() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) throw new Error('Aba Respostas não encontrada.');
+
+  const dados = aba.getDataRange().getValues();
+  const agora = new Date();
+
+  // Parse de todas as linhas de ABERTURA e FECHAMENTO
+  const linhas = [];
+  for (var i = 1; i < dados.length; i++) {
+    var r = dados[i];
+    if (!r[0] || !r[2]) continue;
+    var ts = new Date(r[0]);
+    if (isNaN(ts.getTime())) continue;
+    var tipoRaw = String(r[2]).toUpperCase();
+    var tipo = null;
+    if (tipoRaw.includes('ABERTURA') && !tipoRaw.includes('RETRABALHO')) tipo = 'ABERTURA';
+    else if (tipoRaw.includes('FECHAMENTO')) tipo = 'FECHAMENTO';
+    else continue;
+    var funcRaw = String(r[1] || '').trim();
+    var campoF  = String(r[5] || '');
+    var pts     = campoF.split('|').map(function(x){ return x.trim(); });
+    linhas.push({
+      ts:      ts,
+      tipo:    tipo,
+      func:    funcRaw,
+      funcCod: _rdCodigoOp(funcRaw),
+      op:      String(r[3] || '').trim(),
+      item:    String(r[4] || '').trim(),
+      serie:   pts[0] || '',
+      impl:    pts[1] || '',
+      row:     i + 1,  // linha na planilha (base 1, +1 pelo cabeçalho)
+    });
+  }
+
+  // Algoritmo de pareamento idêntico ao relatório
+  var aberturas = linhas.filter(function(r){ return r.tipo === 'ABERTURA'; })
+    .map(function(r){ return Object.assign({}, r, { _used: false }); });
+
+  linhas.filter(function(r){ return r.tipo === 'FECHAMENTO'; })
+    .forEach(function(fech){
+      var melhor = null, melhorScore = -1;
+      for (var i = 0; i < aberturas.length; i++) {
+        var a = aberturas[i];
+        if (a._used || a.funcCod !== fech.funcCod || a.ts > fech.ts) continue;
+        var score = 1;
+        if (a.op    === fech.op)    score += 4;
+        if (a.serie === fech.serie) score += 2;
+        if (a.item  === fech.item)  score += 1;
+        // Empate: prefere a ABERTURA mais recente (mais próxima do FECHAMENTO)
+        if (score > melhorScore || (score === melhorScore && melhor !== null && a.ts > aberturas[melhor].ts)) {
+          melhorScore = score; melhor = i;
+        }
+      }
+      if (melhor !== null) aberturas[melhor]._used = true;
+    });
+
+  var orfaos = aberturas.filter(function(a){ return !a._used; });
+
+  // Agrupa órfãos por faixa de data
+  var cortes = {
+    antes_fev2026:  new Date('2026-02-01T00:00:00'),
+    antes_mar2026:  new Date('2026-03-01T00:00:00'),
+    antes_abr2026:  new Date('2026-04-01T00:00:00'),
+    antes_mai2026:  new Date('2026-05-01T00:00:00'),
+  };
+
+  var porFaixa = {
+    'Antes de Fev/2026':  [],
+    'Fev/2026':           [],
+    'Mar/2026':           [],
+    'Abr/2026':           [],
+    'Mai/2026 em diante': [],
+  };
+
+  orfaos.forEach(function(o){
+    var d = o.ts;
+    if      (d < cortes.antes_fev2026) porFaixa['Antes de Fev/2026'].push(o);
+    else if (d < cortes.antes_mar2026) porFaixa['Fev/2026'].push(o);
+    else if (d < cortes.antes_abr2026) porFaixa['Mar/2026'].push(o);
+    else if (d < cortes.antes_mai2026) porFaixa['Abr/2026'].push(o);
+    else                               porFaixa['Mai/2026 em diante'].push(o);
+  });
+
+  // Agrupa por operador
+  var porOperador = {};
+  orfaos.forEach(function(o){
+    var k = o.funcCod || o.func;
+    if (!porOperador[k]) porOperador[k] = { func: o.func, funcCod: o.funcCod, count: 0, datas: [] };
+    porOperador[k].count++;
+    var dtStr = Utilities.formatDate(o.ts, 'GMT-3', 'dd/MM/yyyy');
+    if (porOperador[k].datas.indexOf(dtStr) === -1) porOperador[k].datas.push(dtStr);
+  });
+
+  // Agrupa por operação
+  var porOperacao = {};
+  orfaos.forEach(function(o){
+    var k = o.op || '(sem operação)';
+    porOperacao[k] = (porOperacao[k] || 0) + 1;
+  });
+
+  // Impacto na assiduidade: dias únicos por operador contribuídos apenas por órfãos
+  // (dias em que o operador SÓ tem órfão, sem outros registros)
+  var diasPorOp = {};   // todos os registros (para comparar)
+  var diasOrfaoPorOp = {};
+  linhas.forEach(function(r){
+    var k = r.funcCod || r.func;
+    var d = Utilities.formatDate(r.ts, 'GMT-3', 'dd/MM/yyyy');
+    if (!diasPorOp[k]) diasPorOp[k] = new Set();
+    diasPorOp[k].add(d);
+  });
+  orfaos.forEach(function(o){
+    var k = o.funcCod || o.func;
+    var d = Utilities.formatDate(o.ts, 'GMT-3', 'dd/MM/yyyy');
+    if (!diasOrfaoPorOp[k]) diasOrfaoPorOp[k] = new Set();
+    diasOrfaoPorOp[k].add(d);
+  });
+
+  // Linhas de não-órfãos por operador e data
+  var diasComOutros = {};
+  var orfaoRows = new Set(orfaos.map(function(o){ return o.row; }));
+  linhas.forEach(function(r){
+    if (orfaoRows.has(r.row)) return;  // é órfão ele mesmo — pula
+    var k = r.funcCod || r.func;
+    var d = Utilities.formatDate(r.ts, 'GMT-3', 'dd/MM/yyyy');
+    if (!diasComOutros[k]) diasComOutros[k] = new Set();
+    diasComOutros[k].add(d);
+  });
+
+  // Dias que seriam perdidos na assiduidade (só existem por causa do órfão)
+  var diasPerdidosTotal = 0;
+  var assiduidadeImpacto = [];
+  Object.keys(diasOrfaoPorOp).forEach(function(k){
+    var perdidos = 0;
+    diasOrfaoPorOp[k].forEach(function(d){
+      if (!diasComOutros[k] || !diasComOutros[k].has(d)) perdidos++;
+    });
+    if (perdidos > 0) {
+      diasPerdidosTotal += perdidos;
+      assiduidadeImpacto.push({ funcCod: k, diasPerdidos: perdidos });
+    }
+  });
+
+  // Resumo por faixa (simplificado para o JSON de resposta)
+  var resumoFaixas = {};
+  Object.keys(porFaixa).forEach(function(k){
+    resumoFaixas[k] = porFaixa[k].length;
+  });
+
+  // Top operadores por qtd de órfãos
+  var topOps = Object.values(porOperador)
+    .sort(function(a,b){ return b.count - a.count; })
+    .slice(0, 15)
+    .map(function(o){ return { func: o.func, funcCod: o.funcCod, count: o.count }; });
+
+  // Top operações
+  var topOps2 = Object.entries(porOperacao)
+    .sort(function(a,b){ return b[1]-a[1]; })
+    .map(function(e){ return { operacao: e[0], count: e[1] }; });
+
+  // Data do órfão mais antigo e mais recente
+  var datas = orfaos.map(function(o){ return o.ts.getTime(); });
+  var maisAntigo = datas.length ? new Date(Math.min.apply(null, datas)) : null;
+  var maisRecente = datas.length ? new Date(Math.max.apply(null, datas)) : null;
+
+  return {
+    success: true,
+    totais: {
+      totalRegistros:    linhas.length,
+      totalAberturas:    aberturas.length,
+      totalFechamentos:  linhas.filter(function(r){ return r.tipo === 'FECHAMENTO'; }).length,
+      totalPareados:     aberturas.filter(function(a){ return a._used; }).length,
+      totalOrfaos:       orfaos.length,
+      maisAntigo:        maisAntigo ? Utilities.formatDate(maisAntigo, 'GMT-3', 'dd/MM/yyyy') : null,
+      maisRecente:       maisRecente ? Utilities.formatDate(maisRecente, 'GMT-3', 'dd/MM/yyyy') : null,
+    },
+    porFaixa:           resumoFaixas,
+    porOperador:        topOps,
+    porOperacao:        topOps2,
+    impactoAssiduidade: {
+      operadoresAfetados: assiduidadeImpacto.length,
+      diasPerdidosTotal:  diasPerdidosTotal,
+      detalhe:            assiduidadeImpacto,
+    },
+    geradoEm: Utilities.formatDate(agora, 'GMT-3', 'dd/MM/yyyy HH:mm:ss'),
+  };
+}
+
+// ================================================================
+// MARCAR ÓRFÃOS COMO LEGADO (adiciona marcação na coluna de obs)
+// Parâmetro cutoff: data no formato "YYYY-MM-DD" (ex: "2026-03-01")
+// Marca todos os órfãos ANTERIORES à data informada.
+// Execute via: ?action=marcarLegado&key=AGF2026&cutoff=2026-03-01
+// ================================================================
+function marcarOrfaosLegado(cutoffStr) {
+  var cutoff = cutoffStr ? new Date(cutoffStr + 'T00:00:00') : null;
+  if (!cutoff || isNaN(cutoff.getTime())) throw new Error('Parâmetro cutoff inválido. Use formato YYYY-MM-DD.');
+
+  var ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  var aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) throw new Error('Aba Respostas não encontrada.');
+
+  var dados = aba.getDataRange().getValues();
+
+  // Mesmo algoritmo de pareamento para identificar órfãos
+  var linhas = [];
+  for (var i = 1; i < dados.length; i++) {
+    var r = dados[i];
+    if (!r[0] || !r[2]) continue;
+    var ts = new Date(r[0]);
+    if (isNaN(ts.getTime())) continue;
+    var tipoRaw = String(r[2]).toUpperCase();
+    var tipo = null;
+    if (tipoRaw.includes('ABERTURA') && !tipoRaw.includes('RETRABALHO')) tipo = 'ABERTURA';
+    else if (tipoRaw.includes('FECHAMENTO')) tipo = 'FECHAMENTO';
+    else continue;
+    var funcRaw = String(r[1] || '').trim();
+    var pts = String(r[5] || '').split('|').map(function(x){ return x.trim(); });
+    linhas.push({ ts, tipo, funcCod: _rdCodigoOp(funcRaw), op: String(r[3]||'').trim(),
+                  serie: pts[0]||'', item: String(r[4]||'').trim(), row: i+1, _used: false });
+  }
+
+  var aberturas = linhas.filter(function(r){ return r.tipo === 'ABERTURA'; });
+  linhas.filter(function(r){ return r.tipo === 'FECHAMENTO'; }).forEach(function(fech){
+    var melhor = null, melhorScore = -1;
+    for (var i = 0; i < aberturas.length; i++) {
+      var a = aberturas[i];
+      if (a._used || a.funcCod !== fech.funcCod || a.ts > fech.ts) continue;
+      var score = 1;
+      if (a.op === fech.op) score += 4;
+      if (a.serie === fech.serie) score += 2;
+      if (a.item === fech.item) score += 1;
+      // Empate: prefere a ABERTURA mais recente (mais próxima do FECHAMENTO)
+      if (score > melhorScore || (score === melhorScore && melhor !== null && a.ts > aberturas[melhor].ts)) {
+        melhorScore = score; melhor = i;
+      }
+    }
+    if (melhor !== null) aberturas[melhor]._used = true;
+  });
+
+  var orfaosAntigos = aberturas.filter(function(a){ return !a._used && a.ts < cutoff; });
+
+  if (orfaosAntigos.length === 0) return { success: true, message: 'Nenhum órfão anterior a ' + cutoffStr + ' encontrado.', marcados: 0 };
+
+  // Coluna N (índice 13) = OBSERVAÇÃO 2. Adiciona prefixo [LEGADO] se ainda não tiver.
+  var colN = aba.getRange(1, 14, dados.length, 1).getValues();
+  var marcados = 0;
+  orfaosAntigos.forEach(function(o){
+    var idx = o.row - 1; // base 0 no array colN (que começa na linha 1 da planilha)
+    var atual = String(colN[idx][0] || '');
+    if (!atual.includes('[LEGADO]')) {
+      colN[idx][0] = '[LEGADO] ' + atual;
+      marcados++;
+    }
+  });
+
+  aba.getRange(1, 14, dados.length, 1).setValues(colN);
+  return { success: true, message: marcados + ' órfão(s) anteriores a ' + cutoffStr + ' marcados como [LEGADO].', marcados: marcados };
 }
 
