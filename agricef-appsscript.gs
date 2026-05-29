@@ -1162,6 +1162,14 @@ function normalizarRespostasColB() {
 // Padrão do sistema novo (carimboBrowser).
 // Trata: Date objects, YYYY/MM/DD texto, string inglesa "Thu May..."
 // Execute via: ?action=normalizarDatas&key=AGF2026
+//
+// IMPORTANTE: usa a sequência correta para evitar que o Sheets
+// reconverta strings de data de volta para Date objects:
+//   1. setNumberFormat('@') na coluna INTEIRA
+//   2. flush() para aplicar o formato antes de qualquer leitura/escrita
+//   3. Converte TODOS os valores (não só os alterados) para string
+//   4. setValues() com strings puras
+//   5. setNumberFormat('@') novamente após gravar (double-lock)
 // ================================================================
 function normalizarDatasColA() {
   const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -1171,6 +1179,12 @@ function normalizarDatasColA() {
   if (lastRow < 2) { Logger.log('Nenhum registro a normalizar.'); return 0; }
 
   const range = aba.getRange(2, 1, lastRow - 1, 1);
+
+  // PASSO 1: forçar formato texto na coluna ANTES de ler os valores
+  // Sem isso, o Sheets reconverte strings de data para Date objects ao gravar.
+  range.setNumberFormat('@');
+  SpreadsheetApp.flush(); // aplica imediatamente
+
   const colA  = range.getValues();
   let corrigidos = 0;
 
@@ -1190,13 +1204,28 @@ function normalizarDatasColA() {
       const s = String(val).trim();
       if (!s) continue;
 
-      // Já está em dd/MM/yyyy — padrão correto, não muda
-      if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) continue;
+      // Já está em dd/MM/yyyy HH:mm:ss — padrão correto
+      // Mesmo assim gravar de volta como string para consolidar o formato texto
+      if (/^\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}:\d{2}$/.test(s)) {
+        colA[i][0] = s; // garante string pura, não Date
+        continue;
+      }
+
+      // Já está em dd/MM/yyyy (sem hora) — complementa com 00:00:00
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+        nova = s + ' 00:00:00';
+      }
 
       // yyyy/MM/dd HH:mm:ss  →  dd/MM/yyyy HH:mm:ss
-      const mISO = s.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
-      if (mISO) {
-        nova = mISO[3] + '/' + mISO[2] + '/' + mISO[1] + ' ' + mISO[4];
+      if (!nova) {
+        const mISO = s.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+        if (mISO) nova = mISO[3] + '/' + mISO[2] + '/' + mISO[1] + ' ' + mISO[4];
+      }
+
+      // yyyy/MM/dd HH:mm (sem segundos)
+      if (!nova) {
+        const mISOt = s.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}:\d{2})$/);
+        if (mISOt) nova = mISOt[3] + '/' + mISOt[2] + '/' + mISOt[1] + ' ' + mISOt[4] + ':00';
       }
 
       // yyyy/MM/dd (sem hora)
@@ -1225,16 +1254,17 @@ function normalizarDatasColA() {
     }
 
     if (nova) {
-      Logger.log('Col A linha ' + (i + 2) + ': "' + String(val).substring(0,30) + '" → "' + nova + '"');
       colA[i][0] = nova;
       corrigidos++;
     }
   }
 
-  if (corrigidos > 0) {
-    range.setNumberFormat('@'); // força texto — evita que Sheets re-interprete como Date
-    range.setValues(colA);
-  }
+  // PASSO 2: gravar todos os valores como strings
+  range.setValues(colA);
+
+  // PASSO 3: forçar formato texto novamente após gravar (double-lock)
+  range.setNumberFormat('@');
+  SpreadsheetApp.flush();
 
   Logger.log('✅ Col A datas: ' + corrigidos + ' registro(s) normalizado(s).');
   return corrigidos;
