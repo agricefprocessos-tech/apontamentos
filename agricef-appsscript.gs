@@ -103,6 +103,22 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'reconstruirAbertos' && e.parameter.key === 'AGF2026') {
+    try {
+      const result = reconstruirAbertos();
+      return jsonResponse({ success: true, ...result });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'ativarTriggerReconciliacao' && e.parameter.key === 'AGF2026') {
+    try {
+      criarTriggerReconciliacaoAbertos();
+      return jsonResponse({ success: true, message: 'Trigger de reconciliação criado: reconstruirAbertos a cada 30 minutos.' });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'normalizarOperadores' && e.parameter.key === 'AGF2026') {
     try {
       const total = normalizarCodigosOperador();
@@ -218,6 +234,33 @@ function verificarAberto(operador, implemento) {
       const row   = dados[i];
       if (!row[0]) continue; // pula linha completamente vazia
       if (mesmoOperador(row[0], operador)) {
+
+        // ── Bug#29 fix: cross-validação Abertos ↔ Respostas ──────────────
+        // Se o registro tem abertoId, verifica se ele existe na aba Respostas.
+        // Isso detecta "registros fantasmas" — entradas em Abertos sem
+        // correspondência em Respostas (edição manual, falha parcial de escrita, etc.)
+        const abertoIdCheck = String(row[12] || '').trim();
+        if (abertoIdCheck) {
+          const abaReCheck = ss.getSheetByName(ABA_RESPOSTAS);
+          if (abaReCheck) {
+            const dadosReCheck = abaReCheck.getDataRange().getValues();
+            // Coluna P (índice 15) guarda o ID único do registro em Respostas
+            const existeEmRespostas = dadosReCheck.some(
+              (r, idx) => idx > 0 && String(r[15] || '').trim() === abertoIdCheck
+            );
+            if (!existeEmRespostas) {
+              // Registro fantasma: limpa Abertos e retorna false
+              try { aba.deleteRow(i + 1); SpreadsheetApp.flush(); } catch(delErr) {}
+              Logger.log(
+                'verificarAberto [Bug#29]: registro fantasma removido — operador=' + operador +
+                ', abertoId=' + abertoIdCheck
+              );
+              return jsonResponse({ aberto: false, corrigido: true });
+            }
+          }
+        }
+        // ──────────────────────────────────────────────────────────────────
+
         let loteSeries = null;
         if (row[11]) {
           try { loteSeries = JSON.parse(String(row[11])); } catch(e) {}
@@ -1238,6 +1281,150 @@ function limparAbertos() {
   const removidos = Math.max(0, ultima - 1);
   if (removidos > 0) aba.deleteRows(2, removidos);
   Logger.log(removidos + ' registro(s) removido(s).');
+}
+
+// ================================================================
+// Bug#29 — RECONSTRUÇÃO DA ABA ABERTOS A PARTIR DE RESPOSTAS
+//
+// Reconstrói completamente a aba Abertos percorrendo toda a aba
+// Respostas em ordem cronológica. Para cada operador mantém estado
+// de "último tipo aberto"; se não houver fechamento correspondente,
+// o registro vai para o novo Abertos.
+//
+// Garante consistência mesmo após edição manual das planilhas,
+// falha parcial de escrita ou qualquer outra dessincronização.
+//
+// Invocado:
+//   • Manualmente via ?action=reconstruirAbertos&key=AGF2026
+//   • Automaticamente pelo trigger a cada 30 min (se ativado)
+// ================================================================
+
+function reconstruirAbertos() {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  const abaAb = garantirAbaAbertos(ss);
+
+  if (!abaRe) {
+    Logger.log('reconstruirAbertos: aba Respostas não encontrada.');
+    return { corrigidos: 0, abertos: 0, mensagem: 'Aba Respostas não encontrada.' };
+  }
+
+  const dadosRe = abaRe.getDataRange().getValues();
+  if (dadosRe.length < 2) {
+    Logger.log('reconstruirAbertos: aba Respostas vazia.');
+    return { corrigidos: 0, abertos: 0, mensagem: 'Aba Respostas vazia.' };
+  }
+
+  // Valores formatados gravados na planilha (TIPOS_APONTAMENTO)
+  const tiposAbertura   = ['ABERTURA', 'INÍCIO DE RETRABALHO', 'INÍCIO DE PARADA'];
+  const tiposFechamento = ['FECHAMENTO', 'TÉRMINO DE RETRABALHO', 'TÉRMINO DE PARADA'];
+
+  // Map: codigoOperador → dados da última abertura em aberto
+  const abertosPorOp = {};
+
+  for (let i = 1; i < dadosRe.length; i++) {
+    const row = dadosRe[i];
+    if (!row[0] && !row[1]) continue; // linha vazia
+
+    // Ignora registros ISO antigos (carimbo legado 1899-12-30T...)
+    const carimboBruto = String(row[0] || '');
+    if (carimboBruto.includes('T') || carimboBruto.includes('1899')) continue;
+
+    const tipo        = String(row[2] || '').trim();
+    const operadorRaw = String(row[1] || '').trim();
+
+    // Extrai código do operador do campo "117 — RAFAEL..." ou "000117 — RAFAEL..."
+    const codPart     = operadorRaw.split('—')[0].trim();
+    const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
+    if (!operadorCod) continue;
+
+    if (tiposAbertura.includes(tipo)) {
+      // Campo F: "22000073 | HAULER 10" | SÃO MARTINHO"
+      const campoF     = String(row[5] || '');
+      const partes     = campoF.split(' | ');
+      const nrSerie    = (partes[0] || '').trim();
+      const implemento = (partes[1] || '').trim();
+      const cliente    = (partes[2] || '').trim();
+
+      abertosPorOp[operadorCod] = {
+        operador:      operadorCod,
+        implemento:    nrSerie,          // col 1: chave de busca (=nrSerie)
+        tipo:          tipo,             // col 2
+        operacao:      String(row[3] || '').trim(), // col 3
+        carimbo:       carimboBruto,     // col 4
+        codItem:       String(row[4] || '').trim(), // col 5
+        qtdPlanejada:  row[14] || '',    // col 6 ← coluna O de Respostas
+        nrSerie:       nrSerie,          // col 7
+        implementoNome: implemento,      // col 8
+        cliente:       cliente,          // col 9
+        operadorNome:  operadorRaw,      // col 10
+        loteSeries:    '',               // col 11 — não reconstruído (não está em Respostas)
+        abertoId:      String(row[15] || '').trim(), // col 12 ← coluna P de Respostas
+      };
+
+    } else if (tiposFechamento.includes(tipo)) {
+      delete abertosPorOp[operadorCod];
+    }
+  }
+
+  // Guarda quantos registros existiam antes
+  const registrosAntes = Math.max(0, abaAb.getLastRow() - 1);
+
+  // Limpa Abertos (mantém apenas a linha de cabeçalho)
+  if (abaAb.getLastRow() > 1) {
+    abaAb.deleteRows(2, abaAb.getLastRow() - 1);
+  }
+
+  // Reinsere apenas os abertos legítimos
+  const abertos = Object.values(abertosPorOp);
+  for (const a of abertos) {
+    const linha = [
+      a.operador,
+      a.implemento,
+      a.tipo,
+      a.operacao,
+      a.carimbo,
+      a.codItem,
+      a.qtdPlanejada,
+      a.nrSerie,
+      a.implementoNome,
+      a.cliente,
+      a.operadorNome,
+      a.loteSeries,
+      a.abertoId,
+    ];
+    abaAb.appendRow(linha);
+    abaAb.getRange(abaAb.getLastRow(), 1).setNumberFormat('@');
+  }
+
+  SpreadsheetApp.flush();
+
+  const msg = 'reconstruirAbertos: ' + registrosAntes + ' antes → ' + abertos.length + ' depois.';
+  Logger.log(msg);
+  return {
+    corrigidos: registrosAntes - abertos.length,
+    abertos:    abertos.length,
+    mensagem:   msg,
+  };
+}
+
+// ================================================================
+// TRIGGER — Reconciliação periódica da aba Abertos (a cada 30 min)
+// Execute criarTriggerReconciliacaoAbertos() uma vez para ativar.
+// ================================================================
+
+function criarTriggerReconciliacaoAbertos() {
+  // Remove triggers anteriores do mesmo handler (evita duplicação)
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'reconstruirAbertos')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+
+  ScriptApp.newTrigger('reconstruirAbertos')
+    .timeBased()
+    .everyMinutes(30)
+    .create();
+
+  Logger.log('Trigger criado: reconstruirAbertos a cada 30 minutos.');
 }
 
 // ================================================================
