@@ -1370,31 +1370,52 @@ function reconstruirAbertos() {
   // Guarda quantos registros existiam antes
   const registrosAntes = Math.max(0, abaAb.getLastRow() - 1);
 
-  // Limpa Abertos (mantém apenas a linha de cabeçalho)
-  if (abaAb.getLastRow() > 1) {
-    abaAb.deleteRows(2, abaAb.getLastRow() - 1);
+  // Monta linhas novas a serem escritas
+  const abertos = Object.values(abertosPorOp);
+  const novasLinhas = abertos.map(a => [
+    a.operador,
+    a.implemento,
+    a.tipo,
+    a.operacao,
+    a.carimbo,
+    a.codItem,
+    a.qtdPlanejada,
+    a.nrSerie,
+    a.implementoNome,
+    a.cliente,
+    a.operadorNome,
+    a.loteSeries,
+    a.abertoId,
+  ]);
+
+  // Limpa Abertos de forma segura:
+  // 1. Garante ao menos 1 linha extra para não deixar sheet completamente vazia
+  // 2. Escreve as novas linhas (ou linha em branco se não houver abertos)
+  // 3. Apaga o excedente
+  const numNecessario = Math.max(novasLinhas.length, 1); // ao menos 1 linha abaixo do cabeçalho
+  const ultimaLinha   = abaAb.getLastRow();
+
+  // Se faltam linhas, adiciona linhas em branco para ter espaço
+  if (ultimaLinha < numNecessario + 1) {
+    const faltam = numNecessario + 1 - ultimaLinha;
+    for (let k = 0; k < faltam; k++) abaAb.appendRow(['', '', '', '', '', '', '', '', '', '', '', '', '']);
   }
 
-  // Reinsere apenas os abertos legítimos
-  const abertos = Object.values(abertosPorOp);
-  for (const a of abertos) {
-    const linha = [
-      a.operador,
-      a.implemento,
-      a.tipo,
-      a.operacao,
-      a.carimbo,
-      a.codItem,
-      a.qtdPlanejada,
-      a.nrSerie,
-      a.implementoNome,
-      a.cliente,
-      a.operadorNome,
-      a.loteSeries,
-      a.abertoId,
-    ];
-    abaAb.appendRow(linha);
-    abaAb.getRange(abaAb.getLastRow(), 1).setNumberFormat('@');
+  // Escreve as novas linhas (ou linha vazia na linha 2 se não houver abertos)
+  if (novasLinhas.length > 0) {
+    abaAb.getRange(2, 1, novasLinhas.length, 13).setValues(novasLinhas);
+    // Força formato texto na coluna A (operador)
+    abaAb.getRange(2, 1, novasLinhas.length, 1).setNumberFormat('@');
+  } else {
+    // Sem abertos: apenas limpa linha 2
+    abaAb.getRange(2, 1, 1, 13).clearContent();
+  }
+
+  // Remove linhas excedentes (abaixo das novas linhas + 1 em branco obrigatória)
+  const linhasUsadas = Math.max(novasLinhas.length, 1) + 1; // +1 = cabeçalho
+  const totalAtual   = abaAb.getLastRow();
+  if (totalAtual > linhasUsadas) {
+    abaAb.deleteRows(linhasUsadas + 1, totalAtual - linhasUsadas);
   }
 
   SpreadsheetApp.flush();
