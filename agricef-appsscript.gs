@@ -552,7 +552,8 @@ function gravarApontamento(payload) {
       payload.setup      || '',      // M
       payload.obs2       || '',      // N
       qtdPlanejada,                  // O — quantidade planejada
-      gerarIdApontamento(),          // P — ID único
+      abertoId || gerarIdApontamento(), // P — Bug#30 fix: abertura usa abertoId (=col 12 de Abertos)
+                                        //   fechamento gera ID próprio (não tem abertoId)
     ];
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
@@ -601,7 +602,7 @@ function gravarApontamento(payload) {
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
         linhaMod[6]  = qtdRePorSerie;          // G — qtd realizada por série
         linhaMod[14] = String(qtdPlPorSerie);  // O — qtd planejada por série
-        linhaMod[15] = gerarIdApontamento();
+        linhaMod[15] = abertoId || gerarIdApontamento(); // P — Bug#30: lote usa abertoId comum
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
@@ -619,7 +620,7 @@ function gravarApontamento(payload) {
         linhaMod[5]  = serie + ' | ' + payload.implemento + ' | ' + payload.cliente;
         linhaMod[6]  = qtdReLeg;
         linhaMod[14] = String(qtdPlLeg);
-        linhaMod[15] = gerarIdApontamento();
+        linhaMod[15] = abertoId || gerarIdApontamento(); // P — Bug#30: lote legado usa abertoId
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
