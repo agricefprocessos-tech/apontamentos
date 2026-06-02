@@ -264,6 +264,19 @@ function gravarApontamento(payload) {
     const abaAb = garantirAbaAbertos(ss);
     const tipo  = payload.tipoApontamento || '';
 
+    // ---------------------------------------------------------------
+    // VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS (Bug#16, Bug#17, Bug#18)
+    // ---------------------------------------------------------------
+    if (!tipo) {
+      return jsonResponse({ success: false, message: 'Campo tipoApontamento é obrigatório.' });
+    }
+    if (!TIPOS_APONTAMENTO[tipo]) {
+      return jsonResponse({ success: false, message: 'Tipo de apontamento inválido: "' + tipo + '". Use: ' + Object.keys(TIPOS_APONTAMENTO).join(', ') });
+    }
+    if (!payload.operador || String(payload.operador).trim() === '') {
+      return jsonResponse({ success: false, message: 'Campo operador é obrigatório.' });
+    }
+
     // Lê Abertos UMA VEZ — reaproveitado em validação, loteSeriesFechamento e atualizarAbertos
     const dadosAbertos = abaAb.getDataRange().getValues();
 
@@ -285,17 +298,34 @@ function gravarApontamento(payload) {
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue; // linha vazia
         if (mesmoOperador(dadosAbertos[i][0], payload.operador)) {
+          const abertoIdExistente = String(dadosAbertos[i][12] || '');
+          const tipoExistente     = String(dadosAbertos[i][2]  || '');
+          const serieExistente    = String(dadosAbertos[i][7]  || '');
+          // Bug#6 fix: idempotência — se a abertura já existe para o mesmo operador+série+tipo,
+          // retorna sucesso com o abertoId existente (recuperação de phantom record)
+          const mesmoTipo  = tipoExistente === (TIPOS_APONTAMENTO[tipo] || tipo);
+          const mesmaSerie = serieExistente === String(payload.nrSerie || '').trim();
+          if (mesmoTipo && mesmaSerie && abertoIdExistente) {
+            return jsonResponse({
+              success: true,
+              abertoId: abertoIdExistente,
+              message: 'Apontamento já estava em aberto — abertoId retornado para continuidade.',
+              jaAberto: true,
+            });
+          }
+          // Bloqueado por abertura diferente — inclui abertoId para o frontend recuperar
           return jsonResponse({
             success: false,
             bloqueado: true,
             message: 'Operador já possui apontamento em aberto. Feche-o antes de iniciar um novo.',
+            abertoId: abertoIdExistente, // Bug#6 fix: frontend usa para fechar o phantom
             aberto: {
-              tipo:         dadosAbertos[i][2] || '',
+              tipo:         tipoExistente,
               operacao:     dadosAbertos[i][3] || '',
               carimbo:      formatarCarimboGs(dadosAbertos[i][4]),
               codItem:      dadosAbertos[i][5] || '',
               qtdPlanejada: dadosAbertos[i][6] || '',
-              nrSerie:      dadosAbertos[i][7] || '',
+              nrSerie:      serieExistente,
               implemento:   dadosAbertos[i][8] || '',
               cliente:      dadosAbertos[i][9] || '',
             }
@@ -322,6 +352,14 @@ function gravarApontamento(payload) {
         const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
         const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
         if (matchId || matchOp) {
+          // Bug#5 fix: abertoId só pode ser usado pelo próprio operador que o criou
+          if (matchId && !mesmoOperador(dadosAbertos[i][0], payload.operador)) {
+            return jsonResponse({
+              success: false,
+              message: 'Não é possível fechar um apontamento de outro operador.',
+              semAberto: true,
+            });
+          }
           encontrou = true;
           const tipoAberto   = String(dadosAbertos[i][2] || '').trim();
           const tipoEsperado = TIPO_COMPATIVEL[tipo];
@@ -367,10 +405,20 @@ function gravarApontamento(payload) {
     }
 
     // Carimbo: vem do browser já formatado (dd/MM/yyyy HH:mm:ss no fuso local)
-    // Fallback para o servidor em GMT-3 caso não venha
-    const carimbo = (payload.timestamp && !payload.timestamp.includes('T'))
-      ? payload.timestamp
-      : Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    // Fallback para o servidor em GMT-3 caso não venha ou seja inválido
+    // Bug#19 fix: validar formato dd/MM/yyyy HH:mm:ss e rejeitar datas absurdas
+    let carimbo = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    if (payload.timestamp && typeof payload.timestamp === 'string' && !payload.timestamp.includes('T')) {
+      const tsMatch = payload.timestamp.match(/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2}):(\d{2})$/);
+      if (tsMatch) {
+        const ano = parseInt(tsMatch[3]);
+        const anoAtual = new Date().getFullYear();
+        if (ano >= 2020 && ano <= anoAtual + 1) {
+          carimbo = payload.timestamp; // aceita apenas anos razoáveis
+        }
+        // Caso contrário usa server time (timestamp futuro/passado distante ignorado)
+      }
+    }
 
     // ID único para o registro na aba Abertos (gerado uma vez por abertura)
     // Fechamentos recebem o ID do frontend via payload.abertoId
@@ -384,6 +432,20 @@ function gravarApontamento(payload) {
 
     const qtd = (payload.quantidade === null || payload.quantidade === undefined || payload.quantidade === '')
       ? '' : Number(payload.quantidade);
+
+    // Bug#20 fix: quantidade realizada não pode ser negativa
+    if (typeof qtd === 'number' && qtd < 0) {
+      return jsonResponse({ success: false, message: 'Quantidade realizada não pode ser negativa. Valor recebido: ' + qtd });
+    }
+    // Bug#12 fix: limite máximo de quantidade (evita valores absurdos como 999999)
+    const QTD_MAX = 99999;
+    if (typeof qtd === 'number' && qtd > QTD_MAX) {
+      return jsonResponse({ success: false, message: 'Quantidade realizada acima do limite máximo permitido (' + QTD_MAX + '). Valor recebido: ' + qtd });
+    }
+    const qtdPlNum = Number(payload.qtdPlanejada || 0);
+    if (qtdPlNum > QTD_MAX) {
+      return jsonResponse({ success: false, message: 'Quantidade planejada acima do limite máximo permitido (' + QTD_MAX + '). Valor recebido: ' + qtdPlNum });
+    }
 
     let campoF = '';
     if (payload.nrSerie && payload.implemento && payload.cliente) {
@@ -418,21 +480,57 @@ function gravarApontamento(payload) {
     ];
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
+      // Bug#11 fix: validar séries do LOTE contra cadastro
+      const abaSeriesLote = ss.getSheetByName(ABA_SERIES);
+      if (abaSeriesLote) {
+        const seriesData = abaSeriesLote.getDataRange().getValues().slice(1);
+        const seriesValidas = new Set(
+          seriesData.filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
+                    .map(r => String(r[0]).trim())
+        );
+        const seriesInvalidas = payload.loteSeries
+          .filter(item => item.nrSerie && !seriesValidas.has(String(item.nrSerie).trim()))
+          .map(item => item.nrSerie);
+        if (seriesInvalidas.length > 0) {
+          return jsonResponse({
+            success: false,
+            message: 'Séries não encontradas no cadastro: ' + seriesInvalidas.join(', '),
+            seriesInvalidas: seriesInvalidas,
+          });
+        }
+      }
+
+      // Bug#4 fix: quantidade total ÷ número de séries (distribuição proporcional)
+      const numSeries = payload.loteSeries.length;
+      const qtdPlTotal  = Number(payload.qtdPlanejada || 0);
+      const qtdReTotal  = (qtd === '' ? 0 : Number(qtd));
+      const qtdPlPorSerie = numSeries > 0 ? Math.ceil(qtdPlTotal / numSeries) : qtdPlTotal;
+      const qtdRePorSerie = numSeries > 0 ? Math.ceil(qtdReTotal / numSeries) : qtdReTotal;
+
       // Batch write — uma única chamada de API para todas as séries do lote
       const rows = payload.loteSeries.map(item => {
         const linhaMod = [...linha];
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
+        linhaMod[6]  = qtdRePorSerie;          // G — qtd realizada por série
+        linhaMod[14] = String(qtdPlPorSerie);  // O — qtd planejada por série
         linhaMod[15] = gerarIdApontamento();
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
       abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
     } else if (payload.lote && payload.lote.trim() !== '') {
-      // Formato legado — batch write também
+      // Formato legado — batch write com divisão proporcional também
       const series = payload.lote.split(',').map(s => s.trim()).filter(Boolean);
+      const numSeriesLeg = series.length;
+      const qtdPlTotLeg  = Number(payload.qtdPlanejada || 0);
+      const qtdReTotLeg  = (qtd === '' ? 0 : Number(qtd));
+      const qtdPlLeg = numSeriesLeg > 0 ? Math.ceil(qtdPlTotLeg / numSeriesLeg) : qtdPlTotLeg;
+      const qtdReLeg = numSeriesLeg > 0 ? Math.ceil(qtdReTotLeg / numSeriesLeg) : qtdReTotLeg;
       const rows = series.map(serie => {
         const linhaMod = [...linha];
         linhaMod[5]  = serie + ' | ' + payload.implemento + ' | ' + payload.cliente;
+        linhaMod[6]  = qtdReLeg;
+        linhaMod[14] = String(qtdPlLeg);
         linhaMod[15] = gerarIdApontamento();
         return linhaMod;
       });
@@ -465,6 +563,8 @@ function gravarApontamento(payload) {
 
     // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
     atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
+    // Bug#1 fix: força commit imediato para que verificarAberto() leia dados atualizados
+    SpreadsheetApp.flush();
 
     // ---------------------------------------------------------------
     // SALDO PARCIAL — salvo no FECHAMENTO
@@ -2720,20 +2820,36 @@ function limparRegistrosTeste() {
   const aba = ss.getSheetByName(ABA_RESPOSTAS);
   if (!aba) return 0;
   const dados = aba.getDataRange().getValues();
-  const toDelete = [];
-  // Col H (índice 7) = obs1, Col N (índice 13) = obs2
-  for (let i = dados.length - 1; i >= 1; i--) {
+  if (dados.length <= 1) return 0; // só cabeçalho
+
+  const cabecalho = dados[0];
+  const linhasValidas = [cabecalho]; // sempre mantém o cabeçalho
+  let removidos = 0;
+
+  // Estratégia eficiente: filtrar → limpar tudo → reescrever
+  // Muito mais rápido que deleteRow() linha a linha
+  for (let i = 1; i < dados.length; i++) {
     const obs1 = String(dados[i][7]  || '');
     const obs2 = String(dados[i][13] || '');
-    if (obs1.includes('TESTE-AUTO') || obs2.includes('TESTE-AUTO')) {
-      toDelete.push(i + 1); // número real da linha na planilha (base 1)
+    const nome = String(dados[i][1]  || ''); // Col B — nome operador
+    const isTest = obs1.includes('TESTE-AUTO') || obs2.includes('TESTE-AUTO')
+                || obs1.includes('AUTOTESTE')  || obs2.includes('AUTOTESTE')
+                || nome.includes('AUTOTESTE');
+    if (isTest) {
+      removidos++;
+    } else {
+      linhasValidas.push(dados[i]);
     }
   }
-  // Deletar de trás para frente para não deslocar índices
-  for (const row of toDelete) {
-    aba.deleteRow(row);
-  }
-  Logger.log('🧹 Registros de teste removidos: ' + toDelete.length);
-  return toDelete.length;
+
+  if (removidos === 0) return 0;
+
+  // Limpar tudo e reescrever apenas as linhas válidas
+  aba.clearContents();
+  aba.getRange(1, 1, linhasValidas.length, cabecalho.length).setValues(linhasValidas);
+  SpreadsheetApp.flush();
+
+  Logger.log('🧹 Registros de teste removidos: ' + removidos + ' | Válidas mantidas: ' + (linhasValidas.length - 1));
+  return removidos;
 }
 
