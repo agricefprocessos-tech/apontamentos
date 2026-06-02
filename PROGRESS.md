@@ -1,6 +1,74 @@
 # PROGRESS.md — Stress Test AGRICEF Apontamento
-**Atualizado:** 02/06/2026 — CONCLUÍDO
-**Status geral:** ✅ TUDO PRONTO — Runner 100%, todos bugs corrigidos, planilha limpa, GAS v4.5 em produção
+**Atualizado:** 02/06/2026 — SESSÃO 2 CONCLUÍDA
+**Status geral:** ✅ GAS v4.6 deploy @71 — 15 bugs corrigidos, 100% testes executados
+
+---
+
+## SESSÃO 2 — 02/06/2026 (continuação de testes)
+
+### Novos bugs descobertos e corrigidos
+
+| # | Bug | Como encontrado | Fix |
+|---|---|---|---|
+| 21 | LOTE `loteSeries:[]` aceito | B1-01 | Valida `length > 0` antes do bloco LOTE |
+| 22 | `nrSerie:""` aceito em tiposAbertura | B2-05 / RE-04 | Campo obrigatório para ABERTURA/INICIO_RETRABALHO/INICIO_PARADA |
+| 23a | `INICIO_RETRABALHO` sem campo `retrabalho` | B2-07 | Campo obrigatório para INICIO_RETRABALHO |
+| 23b | `INICIO_PARADA` sem campo `parada` | RE-02 | Campo obrigatório para INICIO_PARADA |
+| 24 | TypeError: `(info.operacao||"").substring` — Sheets retorna number | Produção — Op 128 travado | `String()` em 4 locais no HTML + GAS |
+| 24b | `nrSerie` e outros campos chegam como number do Sheets | 6 ops reais | `String()` em todos os campos de `verificarAberto` no GAS |
+
+### Commits desta sessão
+| Hash | Descrição |
+|---|---|
+| `2022d27` | fix: bugs #21-24 — validações LOTE, nrSerie, motivos e operacao type |
+| `31fd54d` | fix: Bug#24b — nrSerie e campos numéricos do verificarAberto |
+
+### Deploy GAS
+- `@68` — Bug#21/22/23 fixes  
+- `@69` — Bug#24 fix (String() em tipo e operacao)
+- `@71` — Bug#24b fix (String() em todos os campos)
+
+### Resultados das Baterias de Teste
+
+**B1 — Edge Cases API (12 testes):**
+| Teste | Cenário | Resultado |
+|---|---|---|
+| B1-01 | LOTE loteSeries=[] | Bug#21 descoberto → CORRIGIDO |
+| B1-03 | Qtd=99999 | ✅ PASSA (falso negativo no 1º run — confirmado RE-01) |
+| B1-04 | Qtd=100000 | ✅ BLOQUEADO |
+| B1-05/06/07 | Timestamps 2020/2019/2028 | ✅ Comportamento correto |
+| B1-08 | String 5000 chars | ✅ Aceita sem erros |
+| B1-09 | XSS em obs1 | ✅ Grava como dado, não executa |
+| B1-10 | Unicode/emoji | ✅ Aceita |
+| B1-11 | Qtd=0 | ✅ Aceita (intencional — paradas) |
+| B1-12 | Qtd como string "50" | ✅ Coerce para número |
+
+**B2 — Tipos e Campos (8 testes):**
+| Teste | Cenário | Resultado |
+|---|---|---|
+| B2-01 | Tipo com espaços "  ABERTURA  " | ✅ REJEITADO |
+| B2-02 | Tipo minúsculo "abertura" | ✅ REJEITADO |
+| B2-03 | Operador como número | ✅ Aceita |
+| B2-04 | Qtd float 1.5 | ✅ Aceita |
+| B2-05 | nrSerie="" | Bug#22 descoberto → CORRIGIDO |
+| B2-06 | abertoId falso | ✅ REJEITADO |
+| B2-07 | INICIO_RETRABALHO sem motivo | Bug#23a descoberto → CORRIGIDO |
+| B2-08 | INICIO_PARADA sem motivo | Bug#23b descoberto → CORRIGIDO |
+
+**B3 — Frontend HTML (6 testes):**
+| Teste | Cenário | Resultado |
+|---|---|---|
+| B3-01/02 | Fila offline — salvar e sincronizar | ✅ Funciona corretamente |
+| B3-03 | AbortController timeout | ✅ 25s, clearTimeout no finally |
+| B3-04/05 | Admin panel PIN 1234 / 0000 | ✅ Libera / Barra corretamente |
+| B3-06a | Validação client-side sem operação | ✅ Bloqueia no frontend |
+| B3-06b | Qtd negativa no frontend | ⚠️ Não bloqueada no frontend (server valida) |
+
+### Situação dos operadores reais (encontrados durante testes)
+8 operadores de produção com apontamentos abertos normais:
+- Ops 108, 109, 119, 123, 128, 130, 1943, 3102
+- Bug#24 impedia fechamento de ops com nrSerie numérica — CORRIGIDO
+- Ops podem fechar normalmente após reload da página
 
 ---
 
