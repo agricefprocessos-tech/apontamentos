@@ -151,6 +151,13 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'debugOp' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(debugOperadorRespostas(e.parameter.operador || '117'));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'limparTestes' && e.parameter.key === 'AGF2026') {
     try {
       const total = limparRegistrosTeste();
@@ -235,31 +242,20 @@ function verificarAberto(operador, implemento) {
       if (!row[0]) continue; // pula linha completamente vazia
       if (mesmoOperador(row[0], operador)) {
 
-        // ── Bug#29 fix: cross-validação Abertos ↔ Respostas ──────────────
-        // Se o registro tem abertoId, verifica se ele existe na aba Respostas.
-        // Isso detecta "registros fantasmas" — entradas em Abertos sem
-        // correspondência em Respostas (edição manual, falha parcial de escrita, etc.)
-        const abertoIdCheck = String(row[12] || '').trim();
-        if (abertoIdCheck) {
-          const abaReCheck = ss.getSheetByName(ABA_RESPOSTAS);
-          if (abaReCheck) {
-            const dadosReCheck = abaReCheck.getDataRange().getValues();
-            // Coluna P (índice 15) guarda o ID único do registro em Respostas
-            const existeEmRespostas = dadosReCheck.some(
-              (r, idx) => idx > 0 && String(r[15] || '').trim() === abertoIdCheck
-            );
-            if (!existeEmRespostas) {
-              // Registro fantasma: limpa Abertos e retorna false
-              try { aba.deleteRow(i + 1); SpreadsheetApp.flush(); } catch(delErr) {}
-              Logger.log(
-                'verificarAberto [Bug#29]: registro fantasma removido — operador=' + operador +
-                ', abertoId=' + abertoIdCheck
-              );
-              return jsonResponse({ aberto: false, corrigido: true });
-            }
-          }
-        }
-        // ──────────────────────────────────────────────────────────────────
+        // Bug#29/30/31: a cross-validação foi removida daqui.
+        // Motivo: verificarAberto é uma operação de LEITURA — fazer
+        // deleções aqui causava condição de corrida com gravarApontamento
+        // e apagava registros legítimos quando os IDs ainda não estavam
+        // sincronizados (pré-Bug#30) ou quando reconstruirAbertos usava
+        // o ID da coluna P de Respostas como abertoId de Abertos.
+        //
+        // A detecção e remoção de registros fantasmas é feita por:
+        //   1. gravarApontamento — cross-valida antes de bloquear por poka-yoke
+        //   2. reconstruirAbertos — trigger periódico de 30 min reconstrói
+        //      Abertos inteiramente a partir de Respostas
+        //
+        // Isso garante que: (a) operações de leitura não têm efeitos colaterais,
+        // (b) limpeza acontece no momento correto (escrita ou ciclo periódico).
 
         let loteSeries = null;
         if (row[11]) {
@@ -373,6 +369,28 @@ function gravarApontamento(payload) {
           const abertoIdExistente = String(dadosAbertos[i][12] || '');
           const tipoExistente     = String(dadosAbertos[i][2]  || '');
           const serieExistente    = String(dadosAbertos[i][7]  || '');
+
+          // Bug#29 fix (movido de verificarAberto para gravarApontamento):
+          // Cross-valida registro em Abertos contra Respostas ANTES de bloquear.
+          // Se o abertoId não existe em Respostas (col P), o registro é fantasma —
+          // remove-o e deixa a abertura continuar.
+          if (abertoIdExistente) {
+            const abaRePhantom = ss.getSheetByName(ABA_RESPOSTAS);
+            if (abaRePhantom) {
+              const dadosRePhantom = abaRePhantom.getDataRange().getValues();
+              const existeEmRe = dadosRePhantom.some(
+                (r, idx) => idx > 0 && String(r[15] || '').trim() === abertoIdExistente
+              );
+              if (!existeEmRe) {
+                // Fantasma confirmado — remove de Abertos e deixa prosseguir
+                abaAb.deleteRow(i + 1);
+                Logger.log('gravarApontamento [Bug#29]: fantasma removido — op=' +
+                  payload.operador + ', abertoId=' + abertoIdExistente);
+                break; // sai do loop e continua para gravar a nova abertura
+              }
+            }
+          }
+
           // Bug#6 fix: idempotência — se a abertura já existe para o mesmo operador+série+tipo,
           // retorna sucesso com o abertoId existente (recuperação de phantom record)
           const mesmoTipo  = tipoExistente === (TIPOS_APONTAMENTO[tipo] || tipo);
@@ -1285,6 +1303,56 @@ function limparAbertos() {
 }
 
 // ================================================================
+// DEBUG — lê os últimos N registros de um operador em Respostas
+// e classifica cada um usando a mesma lógica de reconstruirAbertos
+// ================================================================
+function debugOperadorRespostas(operadorBusca) {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!abaRe) return { error: 'Aba Respostas não encontrada' };
+
+  const dadosRe = abaRe.getDataRange().getValues();
+  const _tiposAberturaKeys   = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
+  const _tiposFechamentoKeys = ['FECHAMENTO', 'TERMINO_RETRABALHO', 'TERMINO_PARADA'];
+  const tiposAberturaSet   = new Set(_tiposAberturaKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
+  const tiposFechamentoSet = new Set(_tiposFechamentoKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
+
+  const result = [];
+  for (let i = 1; i < dadosRe.length; i++) {
+    const row = dadosRe[i];
+    const operadorRaw = String(row[1] || '').trim();
+    const codMatch = operadorRaw.match(/^(\d+)/);
+    const codPart  = codMatch ? codMatch[1] : operadorRaw.split(/\s*[—\-–]\s*/)[0].trim();
+    const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
+    if (!mesmoOperador(operadorCod, operadorBusca)) continue;
+
+    const tipo    = String(row[2] || '').trim();
+    const tipoNFC = tipo.normalize('NFC');
+    const eAb     = tiposAberturaSet.has(tipoNFC);
+    const eFe     = tiposFechamentoSet.has(tipoNFC);
+
+    result.push({
+      row:      i + 1,
+      carimbo:  String(row[0] || ''),
+      tipo:     tipo,
+      tipoNFC:  tipoNFC,
+      ehAb:     eAb,
+      ehFe:     eFe,
+      operador: operadorCod,
+    });
+  }
+
+  const last5 = result.slice(-5);
+  return {
+    totalRecords: result.length,
+    last5: last5,
+    tiposAbSet:  Array.from(tiposAberturaSet),
+    lastTipoNFC: last5.length > 0 ? last5[last5.length-1].tipoNFC : null,
+    matchesAb:   last5.length > 0 ? last5[last5.length-1].ehAb : null,
+  };
+}
+
+// ================================================================
 // Bug#29 — RECONSTRUÇÃO DA ABA ABERTOS A PARTIR DE RESPOSTAS
 //
 // Reconstrói completamente a aba Abertos percorrendo toda a aba
@@ -1316,9 +1384,18 @@ function reconstruirAbertos() {
     return { corrigidos: 0, abertos: 0, mensagem: 'Aba Respostas vazia.' };
   }
 
-  // Valores formatados gravados na planilha (TIPOS_APONTAMENTO)
-  const tiposAbertura   = ['ABERTURA', 'INÍCIO DE RETRABALHO', 'INÍCIO DE PARADA'];
-  const tiposFechamento = ['FECHAMENTO', 'TÉRMINO DE RETRABALHO', 'TÉRMINO DE PARADA'];
+  // Bug#31 fix: mapa reverso de TIPOS_APONTAMENTO para lookup robusto
+  // Normaliza strings para NFC evitando divergência de encoding UTF-8 entre
+  // o código-fonte GAS e os valores armazenados pelo Sheets
+  // (ex: "Í" precomposto U+00CD vs. "I" + combining accent U+0049+U+0301)
+  const _tiposAberturaKeys   = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
+  const _tiposFechamentoKeys = ['FECHAMENTO', 'TERMINO_RETRABALHO', 'TERMINO_PARADA'];
+  // Cria conjuntos NFC-normalizados para comparação insensível a forma de normalização
+  const tiposAberturaSet   = new Set(_tiposAberturaKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
+  const tiposFechamentoSet = new Set(_tiposFechamentoKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
+  // Helper: classifica um tipo de apontamento
+  const ehAbertura   = (t) => tiposAberturaSet.has(String(t || '').normalize('NFC'));
+  const ehFechamento = (t) => tiposFechamentoSet.has(String(t || '').normalize('NFC'));
 
   // Map: codigoOperador → dados da última abertura em aberto
   const abertosPorOp = {};
@@ -1334,12 +1411,15 @@ function reconstruirAbertos() {
     const tipo        = String(row[2] || '').trim();
     const operadorRaw = String(row[1] || '').trim();
 
-    // Extrai código do operador do campo "117 — RAFAEL..." ou "000117 — RAFAEL..."
-    const codPart     = operadorRaw.split('—')[0].trim();
+    // Bug#31 fix: extrai código numérico do operador via regex
+    // Funciona com qualquer variante de traço (–, —, -) e formato de nome
+    // Ex: "117 — RAFAEL..." → "117" | "000117" → "117" | "117" → "117"
+    const codMatch    = operadorRaw.match(/^(\d+)/);
+    const codPart     = codMatch ? codMatch[1] : operadorRaw.split(/\s*[—\-–]\s*/)[0].trim();
     const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
     if (!operadorCod) continue;
 
-    if (tiposAbertura.includes(tipo)) {
+    if (ehAbertura(tipo)) {
       // Campo F: "22000073 | HAULER 10" | SÃO MARTINHO"
       const campoF     = String(row[5] || '');
       const partes     = campoF.split(' | ');
@@ -1363,7 +1443,7 @@ function reconstruirAbertos() {
         abertoId:      String(row[15] || '').trim(), // col 12 ← coluna P de Respostas
       };
 
-    } else if (tiposFechamento.includes(tipo)) {
+    } else if (ehFechamento(tipo)) {
       delete abertosPorOp[operadorCod];
     }
   }
