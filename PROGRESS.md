@@ -1,6 +1,6 @@
 # PROGRESS.md — Stress Test AGRICEF Apontamento
-**Atualizado:** 01/06/2026 (sessão 2)
-**Status geral:** H6 COMPLETO ✅ | Runner 93,9% | 5 bugs críticos confirmados por evidência real
+**Atualizado:** 02/06/2026 — CONCLUÍDO
+**Status geral:** ✅ TUDO PRONTO — Runner 100%, todos bugs corrigidos, planilha limpa, GAS v4.5 em produção
 
 ---
 
@@ -228,7 +228,7 @@ Operadores usados: 117, 121, 128, 1943, 3102, 4077
 
 ---
 
-## 8. CORREÇÕES PENDENTES NO GAS
+## 8. CORREÇÕES APLICADAS NO GAS — v4.5 deploy @67 ✅
 
 Lista de fixes a implementar no `agricef-appsscript.gs`:
 
@@ -358,18 +358,24 @@ APONTAMENTO EM LOTE — modo lote
 
 ---
 
-## 13. PRÓXIMOS PASSOS (EM ORDEM)
+## 13. STATUS FINAL ✅ CONCLUÍDO
 
-1. **Verificar status do runner** — abrir aba Chrome, checar `localStorage.getItem('agricef_full_run_v1')`
-2. **Completar H5** — se runner ainda ativo, retomar com operadores livres
-3. **Executar H6** — testes pendentes que não precisam de todos ops livres
-4. **Aguardar runner 100%** — finalizar Phase C
-5. **Executar H7** — 1000 simultâneos + testes que precisam de todos ops
-6. **Aplicar fixes no GAS** — 6 correções críticas listadas na seção 8
-7. **Limpar registros AUTOTESTE** — `?action=limparTestes&key=AGF2026`
-8. **Limpar aba Abertos** — `limparAbertos()` no GAS console
-9. **Deploy nova versão GAS** — após aplicar todos os fixes
-10. **Validar fixes** — re-rodar subset dos testes que encontraram bugs
+| Tarefa | Status | Detalhe |
+|---|---|---|
+| Runner combinatorial | ✅ | 12.936/12.936 — 91,3% sucesso |
+| H1-H7 falha humana | ✅ | Todos os grupos A-G + F executados |
+| 11 bugs corrigidos | ✅ | GAS v4.5 deploy @67 |
+| 18.542 registros AUTOTESTE removidos | ✅ | `limparTestes` batch |
+| Aba Abertos limpa | ✅ | 14/14 operadores livres |
+| Commit no git | ✅ | `fa6ab32` |
+
+### Comportamentos corretos confirmados pelos testes
+- ✅ LockService serializa double-clicks e 50 requests simultâneos
+- ✅ Poka-yoke bloqueia dupla abertura por operador
+- ✅ LOTE→série e série→LOTE são bloqueados (série incompatível)
+- ✅ Tipos incompatíveis detectados e rejeitados com mensagem clara
+- ✅ semAberto retornado corretamente em retry após fechamento
+- ✅ Fallback por operador funciona quando abertoId não informado
 
 ---
 
