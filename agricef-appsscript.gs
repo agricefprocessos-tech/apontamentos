@@ -225,14 +225,14 @@ function verificarAberto(operador, implemento) {
         return jsonResponse({
           aberto:        true,
           tipo:          String(row[2]  || ''),
-          operacao:      String(row[3]  || ''),  // Bug#24 fix: Sheets pode retornar número
+          operacao:      String(row[3]  || ''),  // Bug#24 fix: Sheets retorna number para células numéricas
           carimbo:       formatarCarimboGs(row[4]),
-          codItem:       row[5]  || '',
-          qtdPlanejada:  row[6]  || '',
-          nrSerie:       row[7]  || '',
-          implemento:    row[8]  || '',
-          cliente:       row[9]  || '',
-          operadorNome:  row[10] || '',
+          codItem:       String(row[5]  || ''),
+          qtdPlanejada:  row[6]  || '',          // mantém número — frontend usa aritmética
+          nrSerie:       String(row[7]  || ''),  // Bug#24b fix: nrSerie numérica (ex: 22000084)
+          implemento:    String(row[8]  || ''),
+          cliente:       String(row[9]  || ''),
+          operadorNome:  String(row[10] || ''),
           loteSeries:    loteSeries,
           abertoId:      String(row[12] || ''),  // ID único gerado na abertura
         });

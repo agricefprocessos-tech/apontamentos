@@ -825,7 +825,7 @@ function iniciarFechamentoRapido() {
   const info = state.abertoInfo;
   document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
   document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
-  const ehLoteRapido = (info.implemento||'').toUpperCase().includes('LOTE') || (info.nrSerie||'').toUpperCase().includes('LOTE');
+  const ehLoteRapido = String(info.implemento||'').toUpperCase().includes('LOTE') || String(info.nrSerie||'').toUpperCase().includes('LOTE');  // Bug#24b
   document.getElementById('fechImplementoLabel').textContent = ehLoteRapido
     ? '🔢 Apontamento em lote'
     : [info.nrSerie, info.implemento, info.cliente].filter(Boolean).join(' | ') || '—';
@@ -907,7 +907,7 @@ function preencherFechamentoSeAberto() {
     mostrar('blocoProducao');
     return;
   }
-  const ehLote = (info.implemento||'').toUpperCase().includes('LOTE');
+  const ehLote = String(info.implemento||'').toUpperCase().includes('LOTE');  // Bug#24b
   document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
   document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
   document.getElementById('fechImplementoLabel').textContent = ehLote
