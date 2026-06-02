@@ -286,6 +286,10 @@ function gravarApontamento(payload) {
     if (_tiposAb.includes(tipo) && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
       return jsonResponse({ success: false, message: 'Campo nrSerie é obrigatório para ' + tipo + '.' });
     }
+    // Bug#28 fix: nrSerie não pode conter "|" (separador do campo F da planilha)
+    if (payload.nrSerie && String(payload.nrSerie).includes('|')) {
+      return jsonResponse({ success: false, message: 'Campo nrSerie não pode conter o caractere "|" (usado como separador interno).' });
+    }
 
     // Bug#23 fix: motivo obrigatório para INICIO_RETRABALHO e INICIO_PARADA
     if (tipo === 'INICIO_RETRABALHO' && (!payload.retrabalho || String(payload.retrabalho).trim() === '')) {
@@ -458,6 +462,10 @@ function gravarApontamento(payload) {
     const qtd = (payload.quantidade === null || payload.quantidade === undefined || payload.quantidade === '')
       ? '' : Number(payload.quantidade);
 
+    // Bug#26 fix: quantidade não-numérica (ex: "abc" → NaN passa typeof number)
+    if (typeof qtd === 'number' && isNaN(qtd)) {
+      return jsonResponse({ success: false, message: 'Quantidade inválida: valor não numérico. Recebido: "' + payload.quantidade + '"' });
+    }
     // Bug#20 fix: quantidade realizada não pode ser negativa
     if (typeof qtd === 'number' && qtd < 0) {
       return jsonResponse({ success: false, message: 'Quantidade realizada não pode ser negativa. Valor recebido: ' + qtd });
@@ -505,6 +513,18 @@ function gravarApontamento(payload) {
     ];
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
+      // Bug#25 fix: todos os itens do lote devem ter nrSerie
+      const semNrSerie = payload.loteSeries.filter(item => !item.nrSerie || String(item.nrSerie).trim() === '');
+      if (semNrSerie.length > 0) {
+        return jsonResponse({ success: false, message: semNrSerie.length + ' item(s) do lote sem nrSerie. Todos os itens precisam informar nrSerie.' });
+      }
+      // Bug#27 fix: não permite séries duplicadas no mesmo lote
+      const nrSeriesNoLote = payload.loteSeries.map(item => String(item.nrSerie).trim());
+      const nrSeriesUnicas = new Set(nrSeriesNoLote);
+      if (nrSeriesUnicas.size !== nrSeriesNoLote.length) {
+        const duplicatas = nrSeriesNoLote.filter((s, i) => nrSeriesNoLote.indexOf(s) !== i);
+        return jsonResponse({ success: false, message: 'Séries duplicadas no lote: ' + [...new Set(duplicatas)].join(', '), duplicatas: [...new Set(duplicatas)] });
+      }
       // Bug#11 fix: validar séries do LOTE contra cadastro
       const abaSeriesLote = ss.getSheetByName(ABA_SERIES);
       if (abaSeriesLote) {
