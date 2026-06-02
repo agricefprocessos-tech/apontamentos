@@ -833,7 +833,7 @@ function iniciarFechamentoRapido() {
   document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
 
   // Mostra campo quantidade só se operação exige
-  const codOp = (info.operacao||'').substring(0,4);
+  const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix: operacao pode ser number (Sheets)
   if (opRequerQtd(codOp) || info.qtdPlanejada) {
     mostrar('blocoQtdFechamento');
   }
@@ -915,7 +915,7 @@ function preencherFechamentoSeAberto() {
     : (info.nrSerie||'')+' | '+(info.implemento||'')+' | '+(info.cliente||'');
   document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
   document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
-  const codOp = (info.operacao||'').substring(0,4);
+  const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix
   if (opRequerQtd(codOp) || info.qtdPlanejada) mostrar('blocoQtdFechamento');
   else esconder('blocoQtdFechamento');
   mostrar('blocoFechamentoInteligente');
@@ -1105,7 +1105,7 @@ async function enviarApontamento() {
       implemento: info.implemento || state.implemento,
       cliente: info.cliente || state.cliente,
       tipoApontamento: 'FECHAMENTO',
-      operacao: (info.operacao||'').substring(0,4),
+      operacao: String(info.operacao||'').substring(0,4),  // Bug#24 fix
       codItem: info.codItem || '',
       quantidade: qtdVal===''?null:Number(qtdVal),
       qtdPlanejada: info.qtdPlanejada || '',
@@ -1191,7 +1191,7 @@ function validarFormulario() {
 
   if (ehFechamentoInteligente || state.modoFechamentoRapido) {
     const info = state.abertoInfo;
-    const codOp = (info.operacao||'').substring(0,4);
+    const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix
     if (opRequerQtd(codOp) || info.qtdPlanejada) {
       const qtd = document.getElementById('fechQuantidade').value;
       // Permite explicitamente 0 (fechar sem produzir nenhuma peça — saldo = total planejado)

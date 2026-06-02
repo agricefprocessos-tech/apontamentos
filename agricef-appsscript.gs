@@ -224,8 +224,8 @@ function verificarAberto(operador, implemento) {
         }
         return jsonResponse({
           aberto:        true,
-          tipo:          row[2]  || '',
-          operacao:      row[3]  || '',
+          tipo:          String(row[2]  || ''),
+          operacao:      String(row[3]  || ''),  // Bug#24 fix: Sheets pode retornar número
           carimbo:       formatarCarimboGs(row[4]),
           codItem:       row[5]  || '',
           qtdPlanejada:  row[6]  || '',
@@ -275,6 +275,31 @@ function gravarApontamento(payload) {
     }
     if (!payload.operador || String(payload.operador).trim() === '') {
       return jsonResponse({ success: false, message: 'Campo operador é obrigatório.' });
+    }
+
+    // ---------------------------------------------------------------
+    // VALIDAÇÕES DE CAMPOS ESPECÍFICOS POR TIPO (Bug#21, #22, #23)
+    // ---------------------------------------------------------------
+    const _tiposAb = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
+
+    // Bug#22 fix: nrSerie obrigatório para tipos de abertura
+    if (_tiposAb.includes(tipo) && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
+      return jsonResponse({ success: false, message: 'Campo nrSerie é obrigatório para ' + tipo + '.' });
+    }
+
+    // Bug#23 fix: motivo obrigatório para INICIO_RETRABALHO e INICIO_PARADA
+    if (tipo === 'INICIO_RETRABALHO' && (!payload.retrabalho || String(payload.retrabalho).trim() === '')) {
+      return jsonResponse({ success: false, message: 'Campo retrabalho (motivo do retrabalho) é obrigatório para INICIO_RETRABALHO.' });
+    }
+    if (tipo === 'INICIO_PARADA' && (!payload.parada || String(payload.parada).trim() === '')) {
+      return jsonResponse({ success: false, message: 'Campo parada (tipo de parada) é obrigatório para INICIO_PARADA.' });
+    }
+
+    // Bug#21 fix: LOTE requer ao menos uma série em loteSeries
+    if (payload.isLote === true || (payload.loteSeries && Array.isArray(payload.loteSeries))) {
+      if (!payload.loteSeries || !Array.isArray(payload.loteSeries) || payload.loteSeries.length === 0) {
+        return jsonResponse({ success: false, message: 'Apontamento em lote requer pelo menos uma série em loteSeries.' });
+      }
     }
 
     // Lê Abertos UMA VEZ — reaproveitado em validação, loteSeriesFechamento e atualizarAbertos
