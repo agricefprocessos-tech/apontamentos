@@ -151,13 +151,6 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'debugOp' && e.parameter.key === 'AGF2026') {
-    try {
-      return jsonResponse(debugOperadorRespostas(e.parameter.operador || '117'));
-    } catch(err) {
-      return jsonResponse({ success: false, message: err.message });
-    }
-  }
   if (action === 'limparTestes' && e.parameter.key === 'AGF2026') {
     try {
       const total = limparRegistrosTeste();
@@ -1300,56 +1293,6 @@ function limparAbertos() {
   const removidos = Math.max(0, ultima - 1);
   if (removidos > 0) aba.deleteRows(2, removidos);
   Logger.log(removidos + ' registro(s) removido(s).');
-}
-
-// ================================================================
-// DEBUG — lê os últimos N registros de um operador em Respostas
-// e classifica cada um usando a mesma lógica de reconstruirAbertos
-// ================================================================
-function debugOperadorRespostas(operadorBusca) {
-  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
-  if (!abaRe) return { error: 'Aba Respostas não encontrada' };
-
-  const dadosRe = abaRe.getDataRange().getValues();
-  const _tiposAberturaKeys   = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
-  const _tiposFechamentoKeys = ['FECHAMENTO', 'TERMINO_RETRABALHO', 'TERMINO_PARADA'];
-  const tiposAberturaSet   = new Set(_tiposAberturaKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
-  const tiposFechamentoSet = new Set(_tiposFechamentoKeys.map(k => TIPOS_APONTAMENTO[k].normalize('NFC')));
-
-  const result = [];
-  for (let i = 1; i < dadosRe.length; i++) {
-    const row = dadosRe[i];
-    const operadorRaw = String(row[1] || '').trim();
-    const codMatch = operadorRaw.match(/^(\d+)/);
-    const codPart  = codMatch ? codMatch[1] : operadorRaw.split(/\s*[—\-–]\s*/)[0].trim();
-    const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
-    if (!mesmoOperador(operadorCod, operadorBusca)) continue;
-
-    const tipo    = String(row[2] || '').trim();
-    const tipoNFC = tipo.normalize('NFC');
-    const eAb     = tiposAberturaSet.has(tipoNFC);
-    const eFe     = tiposFechamentoSet.has(tipoNFC);
-
-    result.push({
-      row:      i + 1,
-      carimbo:  String(row[0] || ''),
-      tipo:     tipo,
-      tipoNFC:  tipoNFC,
-      ehAb:     eAb,
-      ehFe:     eFe,
-      operador: operadorCod,
-    });
-  }
-
-  const last5 = result.slice(-5);
-  return {
-    totalRecords: result.length,
-    last5: last5,
-    tiposAbSet:  Array.from(tiposAberturaSet),
-    lastTipoNFC: last5.length > 0 ? last5[last5.length-1].tipoNFC : null,
-    matchesAb:   last5.length > 0 ? last5[last5.length-1].ehAb : null,
-  };
 }
 
 // ================================================================
