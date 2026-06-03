@@ -159,6 +159,36 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'removerRegistroPorId' && e.parameter.key === 'AGF2026') {
+    try {
+      const idAlvo = e.parameter.id || '';
+      if (!idAlvo) return jsonResponse({ success: false, message: 'Parâmetro id obrigatório.' });
+      const resultado = removerRegistroPorAbertoId(idAlvo);
+      return jsonResponse({ success: true, ...resultado });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'diagRespostas' && e.parameter.key === 'AGF2026') {
+    try {
+      const ss2 = SpreadsheetApp.openById(SPREADSHEET_ID);
+      const aba2 = ss2.getSheetByName(ABA_RESPOSTAS);
+      const lastRow = aba2.getLastRow();
+      const maxRows = aba2.getMaxRows();
+      const dados2 = aba2.getRange(Math.max(1, lastRow - 4), 1, 5, 16).getValues();
+      const rows = dados2.map((r, i) => ({
+        sheetRow: lastRow - 4 + i,
+        colA: String(r[0] || '').substring(0, 30),
+        colB: String(r[1] || '').substring(0, 30),
+        colC: String(r[2] || ''),
+        colH: String(r[7] || ''),
+        colP: String(r[15] || '')
+      }));
+      return jsonResponse({ lastRow, maxRows, lastRows: rows });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'analyzeOrphans' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(analisarOrfaos());
@@ -3111,7 +3141,9 @@ function limparRegistrosTeste() {
     const nome = String(dados[i][1]  || ''); // Col B — nome operador
     const isTest = obs1.includes('TESTE-AUTO') || obs2.includes('TESTE-AUTO')
                 || obs1.includes('AUTOTESTE')  || obs2.includes('AUTOTESTE')
-                || nome.includes('AUTOTESTE');
+                || nome.includes('AUTOTESTE')
+                || nome.includes('HUMANO')     // registros legados sem nome real
+                || obs1.includes('CLEANUP')    || obs2.includes('CLEANUP');
     if (isTest) {
       removidos++;
     } else {
@@ -3128,5 +3160,54 @@ function limparRegistrosTeste() {
 
   Logger.log('🧹 Registros de teste removidos: ' + removidos + ' | Válidas mantidas: ' + (linhasValidas.length - 1));
   return removidos;
+}
+
+// ================================================================
+// REMOVER REGISTRO POR ABERTOid — deleta linha em Respostas (col P)
+// e remove da aba Abertos (col 12). Usado para limpar registros
+// de teste que não têm marcador AUTOTESTE.
+// Execute via: ?action=removerRegistroPorId&key=AGF2026&id=AP-XXXXXX
+// ================================================================
+function removerRegistroPorAbertoId(idAlvo) {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  const abaAb = garantirAbaAbertos(ss);
+  let removidosRe = 0;
+  let removidosAb = 0;
+
+  // Remove de Respostas (col P = índice 15)
+  if (abaRe) {
+    const dadosRe = abaRe.getDataRange().getValues();
+    const linhasValidas = [dadosRe[0]]; // mantém cabeçalho
+    for (let i = 1; i < dadosRe.length; i++) {
+      if (String(dadosRe[i][15] || '').trim() === idAlvo) {
+        removidosRe++;
+      } else {
+        linhasValidas.push(dadosRe[i]);
+      }
+    }
+    if (removidosRe > 0) {
+      abaRe.clearContents();
+      abaRe.getRange(1, 1, linhasValidas.length, dadosRe[0].length).setValues(linhasValidas);
+    }
+  }
+
+  // Remove de Abertos (col 12 = índice 12)
+  if (abaAb) {
+    const dadosAb = abaAb.getDataRange().getValues();
+    for (let i = dadosAb.length - 1; i >= 1; i--) {
+      if (String(dadosAb[i][12] || '').trim() === idAlvo) {
+        abaAb.deleteRow(i + 1);
+        removidosAb++;
+      }
+    }
+  }
+
+  SpreadsheetApp.flush();
+  return {
+    removidosRespostas: removidosRe,
+    removidosAbertos: removidosAb,
+    mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
+  };
 }
 
