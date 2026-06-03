@@ -159,6 +159,13 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'reverterTimestamps' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(reverterTimestampsInterpolados());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'preencherTimestamps' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(preencherTimestampsVazios());
@@ -3240,6 +3247,52 @@ function removerRegistroPorAbertoId(idAlvo) {
     removidosRespostas: removidosRe,
     removidosAbertos: removidosAb,
     mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
+  };
+}
+
+// ================================================================
+// REVERTER TIMESTAMPS INTERPOLADOS — desfaz o preencherTimestampsVazios
+// Remove timestamps que são idênticos ao registro imediatamente anterior
+// (padrão característico de interpolação). Restaura a célula para vazio.
+// Execute via: ?action=reverterTimestamps&key=AGF2026
+// ================================================================
+function reverterTimestampsInterpolados() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  let revertidos = 0;
+  const updates = []; // { row (1-indexed) }
+
+  for (let i = 1; i < dados.length; i++) {
+    const colA = dados[i][0];
+    const colAPrev = dados[i - 1][0];
+    if (!colA || !colAPrev) continue;
+
+    // Converte para string para comparação
+    let tsAtual = '', tsPrev = '';
+    if (colA instanceof Date)    tsAtual = Utilities.formatDate(colA,    'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    else if (typeof colA === 'string') tsAtual = colA.trim();
+    if (colAPrev instanceof Date)  tsPrev  = Utilities.formatDate(colAPrev, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    else if (typeof colAPrev === 'string') tsPrev = colAPrev.trim();
+
+    if (tsAtual && tsPrev && tsAtual === tsPrev) {
+      updates.push({ row: i + 1 });
+      revertidos++;
+    }
+  }
+
+  // Limpa os timestamps interpolados (seta célula para string vazia)
+  for (const upd of updates) {
+    aba.getRange(upd.row, 1).setValue('');
+  }
+  if (revertidos > 0) SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    revertidos,
+    mensagem: revertidos + ' timestamp(s) interpolado(s) removido(s). Células voltaram para vazio.'
   };
 }
 
