@@ -159,6 +159,38 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'preencherTimestamps' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(preencherTimestampsVazios());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'listarRevisoes' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(listarRevisoesPlanilha());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'recuperarTimestamps' && e.parameter.key === 'AGF2026') {
+    try {
+      const revId = e.parameter.revId || '';
+      if (!revId) return jsonResponse({ success: false, message: 'Parâmetro revId obrigatório.' });
+      return jsonResponse(recuperarTimestampsDaRevisao(revId));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'aplicarTimestamps' && e.parameter.key === 'AGF2026') {
+    try {
+      const revId = e.parameter.revId || '';
+      if (!revId) return jsonResponse({ success: false, message: 'Parâmetro revId obrigatório.' });
+      return jsonResponse(aplicarTimestampsDaRevisao(revId));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'removerRegistroPorId' && e.parameter.key === 'AGF2026') {
     try {
       const idAlvo = e.parameter.id || '';
@@ -3208,6 +3240,199 @@ function removerRegistroPorAbertoId(idAlvo) {
     removidosRespostas: removidosRe,
     removidosAbertos: removidosAb,
     mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
+  };
+}
+
+// ================================================================
+// PREENCHER TIMESTAMPS VAZIOS — interpolação pelo registro anterior
+// Preenche col A vazia com o timestamp do último registro com data.
+// Registros sem vizinho anterior são deixados em branco.
+// Execute via: ?action=preencherTimestamps&key=AGF2026
+// ================================================================
+function preencherTimestampsVazios() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  let ultimoTs = null;
+  let preenchidos = 0;
+  const updates = []; // { row (1-indexed), ts }
+
+  for (let i = 1; i < dados.length; i++) {
+    const colA = dados[i][0];
+    // Verifica se há timestamp válido nesta célula
+    let tsStr = '';
+    if (colA instanceof Date && colA.getFullYear() > 1900) {
+      tsStr = Utilities.formatDate(colA, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    } else if (typeof colA === 'string' && colA.trim()) {
+      tsStr = colA.trim();
+    }
+
+    if (tsStr) {
+      ultimoTs = tsStr;
+    } else if (ultimoTs) {
+      // Célula vazia — preenche com o último timestamp conhecido
+      updates.push({ row: i + 1, ts: ultimoTs }); // +1 porque dados[0] é header (linha 1)
+      preenchidos++;
+    }
+  }
+
+  // Aplica os updates linha a linha
+  // (não usa setValues em batch pois as linhas não são contíguas)
+  for (const upd of updates) {
+    aba.getRange(upd.row, 1).setValue(upd.ts);
+  }
+
+  if (preenchidos > 0) SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    preenchidos,
+    mensagem: preenchidos + ' timestamp(s) preenchido(s) por interpolação do registro anterior.'
+  };
+}
+
+// ================================================================
+// LISTAR REVISÕES DA PLANILHA — via Drive REST API (UrlFetchApp)
+// Não requer re-autorização do DriveApp service.
+// Execute via: ?action=listarRevisoes&key=AGF2026
+// ================================================================
+function listarRevisoesPlanilha() {
+  // Usa Drive Advanced Service (já autorizado junto com o scope drive)
+  const lista = [];
+  let pageToken = '';
+  do {
+    const params = { fields: 'revisions(id,modifiedTime,lastModifyingUser/emailAddress),nextPageToken', pageSize: 1000 };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = Drive.Revisions.list(SPREADSHEET_ID, params);
+    (resp.revisions || []).forEach(r => lista.push({
+      id: r.id,
+      data: r.modifiedTime ? Utilities.formatDate(new Date(r.modifiedTime), 'GMT-3', 'dd/MM/yyyy HH:mm:ss') : '',
+      autor: (r.lastModifyingUser || {}).emailAddress || 'desconhecido'
+    }));
+    pageToken = resp.nextPageToken || '';
+  } while (pageToken);
+
+  lista.reverse(); // mais recentes primeiro
+  return { success: true, total: lista.length, ultimas30: lista.slice(0, 30) };
+}
+
+// ================================================================
+// RECUPERAR TIMESTAMPS DE UMA REVISÃO — exporta a revisão como CSV
+// e extrai a coluna A (timestamps) mapeando pelo ID da col P
+// Execute via: ?action=recuperarTimestamps&key=AGF2026&revId=XXX
+// ================================================================
+function recuperarTimestampsDaRevisao(revId) {
+  const token = ScriptApp.getOAuthToken();
+  const headers = { Authorization: 'Bearer ' + token };
+
+  // Verifica se a revisão existe via Drive REST API
+  const revUrl = 'https://www.googleapis.com/drive/v3/files/' + SPREADSHEET_ID + '/revisions/' + revId +
+    '?fields=id,modifiedTime';
+  const revResp = UrlFetchApp.fetch(revUrl, { headers, muteHttpExceptions: true });
+  if (revResp.getResponseCode() !== 200) {
+    return { success: false, message: 'Revisão ' + revId + ' não encontrada. HTTP ' + revResp.getResponseCode() };
+  }
+  const revInfo = JSON.parse(revResp.getContentText());
+  const dataRevisao = revInfo.modifiedTime ?
+    Utilities.formatDate(new Date(revInfo.modifiedTime), 'GMT-3', 'dd/MM/yyyy HH:mm:ss') : '?';
+  // (revAlvo substituído por revInfo/dataRevisao acima — nada a verificar aqui)
+
+  // Exporta a revisão como CSV (primeira aba)
+  const exportUrl = 'https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID +
+    '/export?format=csv&gid=971425155&revision=' + revId;
+  const options = {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true
+  };
+  const resp = UrlFetchApp.fetch(exportUrl, options);
+  if (resp.getResponseCode() !== 200) {
+    return { success: false, message: 'Erro ao exportar revisão: HTTP ' + resp.getResponseCode() };
+  }
+
+  // Parseia o CSV linha a linha
+  const csv = resp.getContentText();
+  const linhas = Utilities.parseCsv(csv);
+  if (linhas.length < 2) return { success: false, message: 'Revisão vazia.' };
+
+  // Mapeia: abertoId (col P = index 15) → timestamp (col A = index 0)
+  const mapa = {};
+  let comTimestamp = 0;
+  for (let i = 1; i < linhas.length; i++) {
+    const row = linhas[i];
+    const ts = String(row[0] || '').trim();
+    const id = String(row[15] || '').trim();
+    if (ts && id) {
+      mapa[id] = ts;
+      comTimestamp++;
+    }
+  }
+
+  return {
+    success: true,
+    revisao: revId,
+    dataRevisao: dataRevisao,
+    totalLinhas: linhas.length - 1,
+    comTimestamp,
+    amostra: Object.entries(mapa).slice(0, 5).map(([id, ts]) => ({ id, ts }))
+  };
+}
+
+// ================================================================
+// APLICAR TIMESTAMPS RECUPERADOS — preenche col A vazia usando
+// o mapa de abertoId→timestamp de uma revisão anterior
+// Execute via: ?action=aplicarTimestamps&key=AGF2026&revId=XXX
+// ================================================================
+function aplicarTimestampsDaRevisao(revId) {
+  // 1. Obtém o mapa da revisão
+  const mapaResult = recuperarTimestampsDaRevisao(revId);
+  if (!mapaResult.success) return mapaResult;
+
+  // Reconstrói o mapa a partir do CSV da revisão
+  const tokenApp2 = ScriptApp.getOAuthToken();
+  const exportUrl = 'https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID +
+    '/export?format=csv&gid=971425155&revision=' + revId;
+  const options = { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true };
+  const csv = UrlFetchApp.fetch(exportUrl, options).getContentText();
+  const linhas = Utilities.parseCsv(csv);
+  const mapa = {};
+  for (let i = 1; i < linhas.length; i++) {
+    const ts = String(linhas[i][0] || '').trim();
+    const id = String(linhas[i][15] || '').trim();
+    if (ts && id) mapa[id] = ts;
+  }
+
+  // 2. Lê Respostas atual e preenche timestamps vazios
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  let preenchidos = 0;
+  const updates = []; // [row, timestamp]
+
+  for (let i = 1; i < dados.length; i++) {
+    const tsAtual = String(dados[i][0] || '').trim();
+    if (tsAtual) continue; // já tem timestamp
+    const id = String(dados[i][15] || '').trim();
+    if (id && mapa[id]) {
+      updates.push({ row: i + 1, ts: mapa[id] });
+      preenchidos++;
+    }
+  }
+
+  // Aplica os updates em batch
+  for (const upd of updates) {
+    aba.getRange(upd.row, 1).setValue(upd.ts);
+  }
+  if (updates.length > 0) SpreadsheetApp.flush();
+
+  return {
+    success: true,
+    revisaoUsada: revId,
+    preenchidos,
+    mensagem: preenchidos + ' timestamp(s) recuperado(s) da revisão ' + revId
   };
 }
 
