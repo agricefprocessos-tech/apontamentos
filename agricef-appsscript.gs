@@ -159,6 +159,13 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'removerSemTimestamp' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(removerRegistrosSemTimestamp());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'reverterTimestamps' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(reverterTimestampsInterpolados());
@@ -3247,6 +3254,52 @@ function removerRegistroPorAbertoId(idAlvo) {
     removidosRespostas: removidosRe,
     removidosAbertos: removidosAb,
     mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
+  };
+}
+
+// ================================================================
+// REMOVER REGISTROS SEM TIMESTAMP — deleta linhas onde col A está vazia.
+// Usa deleteRow de baixo para cima (evita deslocamento de índices).
+// NÃO usa clearContents — opera célula a célula para máxima segurança.
+// Execute via: ?action=removerSemTimestamp&key=AGF2026
+// ================================================================
+function removerRegistrosSemTimestamp() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  const totalAntes = dados.length - 1; // exclui cabeçalho
+
+  // Coleta linhas a deletar (de cima para baixo, mas deleta de baixo para cima)
+  const linhasParaDeletar = [];
+  for (let i = 1; i < dados.length; i++) {
+    const colA = dados[i][0];
+    const vazio = (!colA) ||
+      (colA instanceof Date && colA.getFullYear() <= 1900) ||
+      (typeof colA === 'string' && colA.trim() === '');
+    if (vazio) {
+      linhasParaDeletar.push(i + 1); // número real da linha na planilha (1-indexed)
+    }
+  }
+
+  // Deleta de baixo para cima para não deslocar índices
+  for (let k = linhasParaDeletar.length - 1; k >= 0; k--) {
+    aba.deleteRow(linhasParaDeletar[k]);
+  }
+
+  if (linhasParaDeletar.length > 0) SpreadsheetApp.flush();
+
+  // Verifica o estado final
+  const totalDepois = aba.getLastRow() - 1; // exclui cabeçalho
+
+  return {
+    success: true,
+    removidos: linhasParaDeletar.length,
+    totalAntes,
+    totalDepois,
+    mensagem: linhasParaDeletar.length + ' registro(s) sem timestamp removido(s). ' +
+              totalDepois + ' registros válidos mantidos.'
   };
 }
 
