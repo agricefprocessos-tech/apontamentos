@@ -242,6 +242,20 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'analisarInconsistencias' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(analisarInconsistencias());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'impactoOrfaos' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(impactoOrfaos());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'marcarLegado' && e.parameter.key === 'AGF2026') {
     try {
       const cutoff = e.parameter.cutoff || '';
@@ -3539,6 +3553,359 @@ function aplicarTimestampsDaRevisao(revId) {
     revisaoUsada: revId,
     preenchidos,
     mensagem: preenchidos + ' timestamp(s) recuperado(s) da revisão ' + revId
+  };
+}
+
+// ================================================================
+// ANÁLISE DE INCONSISTÊNCIAS — replica a lógica da aba "Inconsistências"
+// do dashboard AGRICEF para identificação server-side
+// Execute via: ?action=analisarInconsistencias&key=AGF2026
+// ================================================================
+function analisarInconsistencias() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  if (dados.length < 2) return { success: false, message: 'Sem dados.' };
+
+  // ── PARSE REGISTROS ──────────────────────────────────────────
+  // Colunas: A=ts, B=func, C=tipo, D=op, E=item, F=serie, K=tipoParada, I=tipoRet
+  const records = [];
+  for (let i = 1; i < dados.length; i++) {
+    const row  = dados[i];
+    const tsRaw = row[0];
+    const func  = String(row[1] || '').trim();
+    const tipo  = String(row[2] || '').trim();
+    const op    = String(row[3] || '').trim();
+    const item  = String(row[4] || '').trim();
+    const serieRaw = String(row[5] || '').trim();
+    const serie = serieRaw.split(' | ')[0].trim();
+
+    if (!func || !tipo) continue;
+
+    let tsMs;
+    if (tsRaw instanceof Date) {
+      tsMs = tsRaw.getTime();
+    } else if (tsRaw) {
+      tsMs = new Date(String(tsRaw)).getTime();
+    }
+    if (!tsMs || isNaN(tsMs)) continue;
+
+    records.push({ tsMs, func, tipo, op, item, serie });
+  }
+
+  // Ordena por timestamp (mesmo que o dashboard faz ao iterar)
+  records.sort((a, b) => a.tsMs - b.tsMs);
+
+  // ── WORK MINUTES (replica dashboard: seg-sex 08:00-17:00, pausa 12:00-13:00) ──
+  function workMinutes(tsStart, tsEnd) {
+    if (tsEnd <= tsStart) return 0;
+    const WS = 480, WE = 1020, LS = 720, LE = 780; // minutos do dia
+    function mid(ms) { const d = new Date(ms); return d.getHours()*60 + d.getMinutes(); }
+    function wmd(s, e) {
+      s = Math.max(s, WS); e = Math.min(e, WE);
+      if (e <= s) return 0;
+      return e - s - Math.max(0, Math.min(e, LE) - Math.max(s, LS));
+    }
+    function isWD(ms) { const d = new Date(ms); return d.getDay() >= 1 && d.getDay() <= 5; }
+    function nextWDStart(ms) {
+      const d = new Date(ms);
+      d.setHours(8, 0, 0, 0);
+      d.setDate(d.getDate() + 1);
+      while (new Date(d).getDay() < 1 || new Date(d).getDay() > 5) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
+    let tot = 0, cur = tsStart, it = 0;
+    const mCur = mid(cur);
+    if (!isWD(cur) || mCur >= WE) { cur = nextWDStart(cur); }
+    else if (mCur < WS) { const d = new Date(cur); d.setHours(8, 0, 0, 0); cur = d.getTime(); }
+    while (cur < tsEnd && it++ < 500) {
+      if (!isWD(cur)) { cur = nextWDStart(cur); continue; }
+      const eod = new Date(cur); eod.setHours(17, 0, 0, 0);
+      tot += wmd(mid(cur), mid(tsEnd < eod.getTime() ? tsEnd : eod.getTime()));
+      cur = nextWDStart(cur);
+    }
+    return Math.max(0, tot);
+  }
+
+  // ── PAIR ROWS (replica exata do dashboard) ────────────────────
+  function pairRows(rows, openType, closeType) {
+    const pairs = [];
+    const opens = [];
+    rows.forEach(r => {
+      if (r.tipo === openType) {
+        opens.push({ ...r, _used: false });
+      } else if (r.tipo === closeType) {
+        let best = null, bestScore = -1;
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs) continue;
+          let score = 1;
+          if (o.op    === r.op)    score += 4;
+          if (o.serie === r.serie) score += 2;
+          if (o.item  === r.item)  score += 1;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+        if (best !== null) {
+          const o = opens[best];
+          const dur = workMinutes(o.tsMs, r.tsMs);
+          if (dur > 0 && dur < 4800) {
+            pairs.push({ func: r.func, op: r.op || o.op, serie: r.serie || o.serie,
+              item: r.item || o.item, dur, openTs: o.tsMs, closeTs: r.tsMs });
+          }
+          opens[best]._used = true;
+        }
+      }
+    });
+    return pairs;
+  }
+
+  // ── CHECK 1: ABERTURAs sem FECHAMENTO ─────────────────────────
+  const pairsAudit = pairRows(records, 'ABERTURA', 'FECHAMENTO');
+  const pairedOpenKeys = new Set(pairsAudit.map(p => p.func + '||' + p.openTs));
+  const backlog = records.filter(r =>
+    r.tipo === 'ABERTURA' && !pairedOpenKeys.has(r.func + '||' + r.tsMs)
+  );
+
+  // ── CHECK 2: Durações suspeitas (> 10h work ou < 1 min work) ──
+  const allPairs = [
+    ...pairRows(records, 'ABERTURA', 'FECHAMENTO'),
+    ...pairRows(records, 'INÍCIO DE PARADA', 'TÉRMINO DE PARADA'),
+    ...pairRows(records, 'INÍCIO DE RETRABALHO', 'TÉRMINO DE RETRABALHO'),
+  ];
+  const tooLong  = allPairs.filter(p => p.dur > 600);
+  const tooShort = allPairs.filter(p => p.dur > 0 && p.dur < 1);
+
+  // ── CHECK 3: Apontamentos simultâneos (< 2 min entre ABERTURAs, ops distintas) ──
+  const aberturas = records.filter(r => r.tipo === 'ABERTURA').sort((a, b) => a.tsMs - b.tsMs);
+  const byFunc = {};
+  aberturas.forEach(r => { if (!byFunc[r.func]) byFunc[r.func] = []; byFunc[r.func].push(r); });
+  const simultaneos = [];
+  Object.entries(byFunc).forEach(([func, recs]) => {
+    for (let i = 0; i < recs.length - 1; i++) {
+      const a = recs[i], b = recs[i+1];
+      const diffMin = (b.tsMs - a.tsMs) / 60000;
+      if (diffMin < 2 && a.op !== b.op) {
+        simultaneos.push({ func, tsA: a.tsMs, tsB: b.tsMs, opA: a.op, opB: b.op });
+      }
+    }
+  });
+
+  // ── CHECK 4: FECHAMENTOs sem ABERTURA ────────────────────────
+  const pairedCloseKeys = new Set(pairsAudit.map(p => p.func + '||' + p.closeTs));
+  const orphanClose = records.filter(r =>
+    r.tipo === 'FECHAMENTO' && !pairedCloseKeys.has(r.func + '||' + r.tsMs)
+  );
+
+  // ── TOTAIS ──────────────────────────────────────────────────
+  const total = backlog.length + tooLong.length + tooShort.length + simultaneos.length + orphanClose.length;
+
+  function fmtTs(ms) {
+    return Utilities.formatDate(new Date(ms), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+  }
+
+  return {
+    success: true,
+    totalRegistros: records.length,
+    totalPares: pairsAudit.length,
+    totalInconsistencias: total,
+    aberturaSemFechamento: {
+      count: backlog.length, sev: 'alta',
+      exemplos: backlog.slice(0, 15).map(r => ({
+        func: r.func, op: r.op, serie: r.serie, ts: fmtTs(r.tsMs)
+      }))
+    },
+    fechamentoSemAbertura: {
+      count: orphanClose.length, sev: 'baixa',
+      exemplos: orphanClose.slice(0, 15).map(r => ({
+        func: r.func, op: r.op, ts: fmtTs(r.tsMs)
+      }))
+    },
+    duracaoLonga: {
+      count: tooLong.length, sev: 'media',
+      exemplos: tooLong.slice(0, 10).map(p => ({
+        func: p.func, op: p.op, durMin: Math.round(p.dur),
+        de: fmtTs(p.openTs), ate: fmtTs(p.closeTs)
+      }))
+    },
+    duracaoCurta: {
+      count: tooShort.length, sev: 'baixa',
+      exemplos: tooShort.slice(0, 10).map(p => ({
+        func: p.func, op: p.op, durSeg: Math.round(p.dur * 60),
+        ts: fmtTs(p.openTs)
+      }))
+    },
+    simultaneos: {
+      count: simultaneos.length, sev: 'media',
+      exemplos: simultaneos.slice(0, 10).map(s => ({
+        func: s.func, opA: s.opA, opB: s.opB,
+        tsA: fmtTs(s.tsA), tsB: fmtTs(s.tsB)
+      }))
+    }
+  };
+}
+
+// ── Placeholder functions referenciadas em doGet ──────────────────────────────
+function analisarOrfaos() {
+  return analisarInconsistencias();
+}
+
+function marcarOrfaosLegado(cutoff) {
+  return { success: false, message: 'Função não implementada. Use analisarInconsistencias.' };
+}
+
+// ================================================================
+// IMPACTO DA REMOÇÃO DE ÓRFÃOS — detalha os registros inconsistentes
+// para avaliação antes de qualquer remoção
+// Execute via: ?action=impactoOrfaos&key=AGF2026
+// ================================================================
+function impactoOrfaos() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  if (dados.length < 2) return { success: false, message: 'Sem dados.' };
+
+  function fmtTs(ms) {
+    return Utilities.formatDate(new Date(ms), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm');
+  }
+
+  // ── PARSE (igual a analisarInconsistencias) ──────────────────
+  const records = [];
+  for (let i = 1; i < dados.length; i++) {
+    const row    = dados[i];
+    const tsRaw  = row[0];
+    const func   = String(row[1] || '').trim();
+    const tipo   = String(row[2] || '').trim();
+    const op     = String(row[3] || '').trim();
+    const item   = String(row[4] || '').trim();
+    const serie  = String(row[5] || '').trim().split(' | ')[0].trim();
+
+    if (!func || !tipo) continue;
+
+    let tsMs;
+    if (tsRaw instanceof Date) tsMs = tsRaw.getTime();
+    else if (tsRaw)            tsMs = new Date(String(tsRaw)).getTime();
+    if (!tsMs || isNaN(tsMs))  continue;
+
+    records.push({ tsMs, func, tipo, op, item, serie, sheetRow: i + 1 });
+  }
+
+  records.sort((a, b) => a.tsMs - b.tsMs);
+
+  // ── PAIR ROWS ────────────────────────────────────────────────
+  function pairRows(rows, openType, closeType) {
+    const pairs = [];
+    const opens = [];
+    rows.forEach(r => {
+      if (r.tipo === openType) {
+        opens.push({ ...r, _used: false });
+      } else if (r.tipo === closeType) {
+        let best = null, bestScore = -1;
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs) continue;
+          let score = 1;
+          if (o.op    === r.op)    score += 4;
+          if (o.serie === r.serie) score += 2;
+          if (o.item  === r.item)  score += 1;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+        if (best !== null) {
+          const o = opens[best];
+          const durRaw = (r.tsMs - o.tsMs) / 60000; // minutos reais (sem filtro workMinutes)
+          if (durRaw > 0) {
+            pairs.push({ func: r.func, op: r.op || o.op, serie: r.serie || o.serie,
+              item: r.item || o.item, durRaw, openTs: o.tsMs, closeTs: r.tsMs });
+          }
+          opens[best]._used = true;
+        }
+      }
+    });
+    return pairs;
+  }
+
+  const pairsAudit = pairRows(records, 'ABERTURA', 'FECHAMENTO');
+  const pairedOpenKeys  = new Set(pairsAudit.map(p => p.func + '||' + p.openTs));
+  const pairedCloseKeys = new Set(pairsAudit.map(p => p.func + '||' + p.closeTs));
+
+  const backlog     = records.filter(r => r.tipo === 'ABERTURA'   && !pairedOpenKeys.has(r.func  + '||' + r.tsMs));
+  const orphanClose = records.filter(r => r.tipo === 'FECHAMENTO' && !pairedCloseKeys.has(r.func + '||' + r.tsMs));
+
+  // ── AGRUPA POR FUNCIONÁRIO ──────────────────────────────────
+  function agrupar(lista) {
+    const m = {};
+    lista.forEach(r => {
+      if (!m[r.func]) m[r.func] = { func: r.func, count: 0, ops: new Set(), datas: [] };
+      m[r.func].count++;
+      if (r.op) m[r.func].ops.add(r.op);
+      m[r.func].datas.push(r.tsMs);
+    });
+    return Object.values(m).map(v => ({
+      func: v.func.split(' - ').slice(1).join(' ') || v.func,
+      funcRaw: v.func,
+      count: v.count,
+      ops: [...v.ops].join(', '),
+      primeiro: fmtTs(Math.min(...v.datas)),
+      ultimo:   fmtTs(Math.max(...v.datas))
+    })).sort((a, b) => b.count - a.count);
+  }
+
+  // ── DISTRIBUIÇÃO POR MÊS ────────────────────────────────────
+  function porMes(lista) {
+    const m = {};
+    lista.forEach(r => {
+      const mes = Utilities.formatDate(new Date(r.tsMs), 'America/Sao_Paulo', 'yyyy-MM');
+      m[mes] = (m[mes] || 0) + 1;
+    });
+    return Object.entries(m).sort().map(([mes, cnt]) => ({ mes, cnt }));
+  }
+
+  // ── ESTIMATIVA DE HORAS PERDIDAS ─────────────────────────────
+  // Para ABERTURAs órfãs: tentamos estimar duração pelo próximo FECHAMENTO do mesmo func
+  // (mesmo que não pareado), para ter ideia do volume perdido
+  let minutosPerdidosEstimados = 0;
+  backlog.forEach(ab => {
+    // Procura o FECHAMENTO mais próximo após esta ABERTURA para o mesmo funcionário
+    const prox = orphanClose.find(fc => fc.func === ab.func && fc.tsMs > ab.tsMs);
+    if (prox) {
+      const d = (prox.tsMs - ab.tsMs) / 60000;
+      if (d > 0 && d < 24 * 60) minutosPerdidosEstimados += d; // só conta se < 24h
+    }
+  });
+
+  return {
+    success: true,
+    totalRegistros: records.length,
+    totalOrfaos: backlog.length + orphanClose.length,
+    pctDoTotal: ((backlog.length + orphanClose.length) / records.length * 100).toFixed(2) + '%',
+
+    aberturaSemFechamento: {
+      total: backlog.length,
+      porFuncionario: agrupar(backlog),
+      porMes: porMes(backlog),
+      detalhes: backlog.map(r => ({
+        func: r.func, op: r.op, serie: r.serie, item: r.item,
+        ts: fmtTs(r.tsMs), sheetRow: r.sheetRow
+      }))
+    },
+
+    fechamentoSemAbertura: {
+      total: orphanClose.length,
+      porFuncionario: agrupar(orphanClose),
+      porMes: porMes(orphanClose),
+      detalhes: orphanClose.map(r => ({
+        func: r.func, op: r.op, serie: r.serie, item: r.item,
+        ts: fmtTs(r.tsMs), sheetRow: r.sheetRow
+      }))
+    },
+
+    impactoEstimado: {
+      horasEstimadas: (minutosPerdidosEstimados / 60).toFixed(1),
+      obs: 'Estimativa de horas de produção representadas pelos pares órfãos (ABERTURA+FECHAMENTO sem par entre si)'
+    }
   };
 }
 

@@ -1081,8 +1081,11 @@ function pairRows(rows, openType, closeType){
       }
       if(best!==null){
         const o=opens[best];
-        const dur = workMinutes(tsToDate(o.ts), tsToDate(r.ts));
-        if(dur>0 && dur<4800){
+        const oDate=tsToDate(o.ts), rDate=tsToDate(r.ts);
+        const durReal=(rDate-oDate)/60000; // minutos reais de relógio
+        const dur=workMinutes(oDate,rDate);  // minutos úteis (para métricas)
+        // Valida com duração real (> 0 e < 7 dias): evita falso-positivo em fins de semana
+        if(durReal>0 && durReal<10080){
           pairs.push({
             func:r.func, op:r.op||o.op,
             serie:r.serie||o.serie, impl:r.impl||o.impl, client:r.client||o.client,
