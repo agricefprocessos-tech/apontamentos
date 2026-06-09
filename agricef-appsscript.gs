@@ -1498,6 +1498,22 @@ function limparAbertos() {
 // ================================================================
 
 function reconstruirAbertos() {
+  // Fix#RaceCondition: adquire o mesmo lock que gravarApontamento usa.
+  // Se gravarApontamento estiver em execução, pula esta rodada e tenta
+  // na próxima chamada do trigger (30 min depois).
+  // tryLock(10000) = aguarda até 10s antes de desistir.
+  const lock = LockService.getScriptLock();
+  try {
+    if (!lock.tryLock(10000)) {
+      Logger.log('reconstruirAbertos: lock ocupado — pulando esta execução para evitar race condition');
+      return { corrigidos: 0, abertos: 0, mensagem: 'Skipped: lock ocupado por outra operação' };
+    }
+  } catch(lockErr) {
+    Logger.log('reconstruirAbertos: erro ao adquirir lock — ' + lockErr.message);
+    return { corrigidos: 0, abertos: 0, mensagem: 'Erro ao adquirir lock: ' + lockErr.message };
+  }
+
+  try {
   const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
   const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
   const abaAb = garantirAbaAbertos(ss);
@@ -1637,6 +1653,9 @@ function reconstruirAbertos() {
     abertos:    abertos.length,
     mensagem:   msg,
   };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ================================================================

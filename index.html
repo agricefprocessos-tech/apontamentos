@@ -510,8 +510,8 @@ async function init() {
   sincronizarFila();
   // Badge inicial (mostra se houver itens pendentes de sessões anteriores)
   atualizarBadgeFila();
-  // Retry automático a cada 45s enquanto a página estiver aberta
-  setInterval(() => sincronizarFila(), 45000);
+  // Retry automático a cada 30s enquanto a página estiver aberta
+  setInterval(() => sincronizarFila(), 30000);
 }
 
 function iniciarRelogio() {
@@ -1166,14 +1166,16 @@ async function enviarApontamento() {
       btn.disabled=false; btn.textContent='Registrar apontamento';
     }
   } catch(err) {
-    // Falha de rede ou servidor indisponível — salva localmente e avisa claramente
+    // Falha de rede, timeout ou servidor indisponível — salva localmente
     salvarOffline(payload);
     setLoading(false);
     btn.disabled=false; btn.textContent='Registrar apontamento';
     // Mostra tela de sucesso com aviso de offline visível
     mostrarSucesso(payload, true);
-    // Toast adicional para garantir que o operador veja
-    setTimeout(() => showToast('⚠ Sem conexão com o servidor — apontamento salvo localmente e será enviado automaticamente','error',7000), 400);
+    // Tenta reenviar após 30s (servidor pode estar processando outra requisição)
+    setTimeout(() => sincronizarFila(), 30000);
+    // Toast claro para o operador
+    setTimeout(() => showToast('⚠ Servidor ocupado — apontamento salvo e será reenviado automaticamente em instantes','error',8000), 400);
     return;
   } finally { setLoading(false); }
 }
@@ -1348,7 +1350,7 @@ async function postAPI(obj) {
   // Google Apps Script (POST perde o body no redirect 302 em browsers mobile).
   // _t=timestamp garante que o CDN do Google não sirva resposta cacheada.
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000); // timeout 25s
+  const timer = setTimeout(() => controller.abort(), 55000); // timeout 55s — GAS lock pode levar até 15s + processamento
   try {
     const params = new URLSearchParams({ payload: JSON.stringify(obj), _t: Date.now() });
     const res = await fetch(API + '?' + params.toString(), { signal: controller.signal });
