@@ -953,12 +953,15 @@ function parseSheetJSON(rows){
   const kSetup=findCol('TIPO DE OPERA\u00c7\u00c3O DE SET-UP',['SET-UP','SETUP']);
   const kRetrab=findCol('TIPOS DE RETRABALHOS',['RETRABALHO']);
   const kOp2=findCol('TIPO DE OPERA\u00c7\u00c3O 2',['OPERACAO 2','OPERAÇÃO 2']);
+  // Fix#ID-LINK: col P = elo de pareamento ABERTURA↔FECHAMENTO
+  const kId=findCol('ID',['COLUNA 16','ID DO APONTAMENTO']);
   const records=[];
   for(const row of rows){
     function g(k){return k?String(row[k]||'').trim():'';}
     const tsRaw=g(kTS),func=g(kFunc),serieRaw=g(kSerie);
     const tipo=g(kTipo),op=g(kOp),item=g(kItem),qty=g(kQty);
     const tipoParada=g(kParada),tipoSetup=g(kSetup),tipoRet=g(kRetrab),op2=g(kOp2);
+    const abertoId=g(kId); // col P: Fix#ID-LINK
     if(!tsRaw||!func||func==='NOME DO OPERADOR') continue;
     let tsNorm=tsRaw;
     if(tsRaw.includes('T')&&(tsRaw.includes('Z')||tsRaw.includes('+'))){
@@ -971,7 +974,7 @@ function parseSheetJSON(rows){
     const parts=serieRaw.split(' | ');
     records.push({ts:tsNorm,func,serie_raw:serieRaw,serie:(parts[0]||'').trim(),
       impl:(parts[1]||'').trim(),client:(parts[2]||'').trim(),
-      tipo,op,item,qty,obs1:'',tipoParada,tipoSetup,tipoRetrabalho:tipoRet,op2});
+      tipo,op,item,qty,obs1:'',tipoParada,tipoSetup,tipoRetrabalho:tipoRet,op2,abertoId});
   }
   console.log('Parsed:',records.length,'|Tipos:',[...new Set(records.map(r=>r.tipo))]);
   return records;
@@ -1055,51 +1058,100 @@ function tsToDate(ts){
 
 function tsToDateStr(ts){ if(!ts) return ''; return ts.slice(0,10).replace(/\//g,'-'); }
 
-// ── PAIR LOGIC ───────────────────────────────────────────────────────────────
-// Match ABERTURA → FECHAMENTO by best score (func + op + serie + item)
-// Same for INÍCIO DE PARADA → TÉRMINO DE PARADA
-// Same for INÍCIO DE RETRABALHO → TÉRMINO DE RETRABALHO
+// ── PAIR LOGIC ─────────────────────────────────────────────────────────────
+// Estratégia de pareamento em duas camadas:
+//   1. Direto por ID (Fix#ID-LINK): FECHAMENTO.abertoId === ABERTURA.abertoId
+//      → usado para registros pós-correção (garantido correto)
+//   2. Fallback greedy por score func+op+serie+item
+//      → usado para registros históricos sem ID-link
+//      → fix: _used=true APENAS quando o par é aceito (durReal válido)
+//         evita consumo de ABERTURA por par rejeitado
 function pairRows(rows, openType, closeType){
   const pairs = [];
-  const opens = [];
+
+  // --- Fase 1: pareamento direto por ID ---
+  // Mapa: abertoId → registro de abertura (para lookup O(1))
+  const openById = {};
   rows.forEach(r => {
-    if(r.tipo === openType){
-      opens.push({...r, _used:false});
-    } else if(r.tipo === closeType){
-      let best=null, bestScore=-1;
-      const rTs = tsToDate(r.ts);
-      for(let i=0;i<opens.length;i++){
-        const o=opens[i];
-        if(o._used) continue;
-        if(o.func !== r.func) continue;
-        if(tsToDate(o.ts) > rTs) continue;
-        let score = 1;
-        if(o.op === r.op) score += 4;
-        if(o.serie === r.serie) score += 2;
-        if(o.item === r.item) score += 1;
-        if(score > bestScore){ bestScore=score; best=i; }
-      }
-      if(best!==null){
-        const o=opens[best];
-        const oDate=tsToDate(o.ts), rDate=tsToDate(r.ts);
-        const durReal=(rDate-oDate)/60000; // minutos reais de relógio
-        const dur=workMinutes(oDate,rDate);  // minutos úteis (para métricas)
-        // Valida com duração real (> 0 e < 7 dias): evita falso-positivo em fins de semana
-        if(durReal>0 && durReal<10080){
-          pairs.push({
-            func:r.func, op:r.op||o.op,
-            serie:r.serie||o.serie, impl:r.impl||o.impl, client:r.client||o.client,
-            item:r.item||o.item, qty:r.qty||o.qty,
-            tipoParada:o.tipoParada||r.tipoParada,
-            tipoSetup:o.tipoSetup||r.tipoSetup,
-            tipoRetrabalho:o.tipoRetrabalho||r.tipoRetrabalho,
-            dur, openTs:o.ts, closeTs:r.ts
-          });
-        }
-        opens[best]._used=true;
-      }
+    if(r.tipo === openType && r.abertoId && r.abertoId.startsWith('AP-')){
+      // Se houver duplicata de ID (improvável), o mais recente prevalece
+      if(!openById[r.abertoId]) openById[r.abertoId] = {...r, _usedById: false};
     }
   });
+
+  const pairedByIdKeys = new Set(); // func+'||'+ts das ABERTURAs já pareadas por ID
+
+  rows.forEach(r => {
+    if(r.tipo !== closeType) return;
+    const refId = r.abertoId;
+    if(!refId || !refId.startsWith('AP-')) return;
+    const o = openById[refId];
+    if(!o || o._usedById) return;
+    // Par válido por ID — não aplica filtro de durReal (ID é prova suficiente)
+    const oDate = tsToDate(o.ts), rDate = tsToDate(r.ts);
+    const durReal = (rDate - oDate) / 60000;
+    const dur = workMinutes(oDate, rDate);
+    pairs.push({
+      func:r.func, op:r.op||o.op,
+      serie:r.serie||o.serie, impl:r.impl||o.impl, client:r.client||o.client,
+      item:r.item||o.item, qty:r.qty||o.qty,
+      tipoParada:o.tipoParada||r.tipoParada,
+      tipoSetup:o.tipoSetup||r.tipoSetup,
+      tipoRetrabalho:o.tipoRetrabalho||r.tipoRetrabalho,
+      dur, openTs:o.ts, closeTs:r.ts, pairedById:true
+    });
+    o._usedById = true;
+    pairedByIdKeys.add(o.func + '||' + o.ts);
+  });
+
+  // --- Fase 2: fallback greedy para registros históricos sem ID-link ---
+  const opens = [];
+  rows.forEach(r => {
+    if(r.tipo === openType && !pairedByIdKeys.has(r.func + '||' + r.ts)){
+      opens.push({...r, _used: false});
+    }
+  });
+
+  rows.forEach(r => {
+    if(r.tipo !== closeType) return;
+    // Já pareado por ID? pular
+    if(r.abertoId && r.abertoId.startsWith('AP-') && openById[r.abertoId] && openById[r.abertoId]._usedById) return;
+
+    let best=null, bestScore=-1;
+    const rTs = tsToDate(r.ts);
+    for(let i=0;i<opens.length;i++){
+      const o=opens[i];
+      if(o._used) continue;
+      if(o.func !== r.func) continue;
+      if(tsToDate(o.ts) > rTs) continue;
+      let score = 1;
+      if(o.op === r.op) score += 4;
+      if(o.serie === r.serie) score += 2;
+      if(o.item === r.item) score += 1;
+      if(score > bestScore){ bestScore=score; best=i; }
+    }
+    if(best!==null){
+      const o=opens[best];
+      const oDate=tsToDate(o.ts), rDate=tsToDate(r.ts);
+      const durReal=(rDate-oDate)/60000;
+      const dur=workMinutes(oDate,rDate);
+      if(durReal>0 && durReal<10080){
+        pairs.push({
+          func:r.func, op:r.op||o.op,
+          serie:r.serie||o.serie, impl:r.impl||o.impl, client:r.client||o.client,
+          item:r.item||o.item, qty:r.qty||o.qty,
+          tipoParada:o.tipoParada||r.tipoParada,
+          tipoSetup:o.tipoSetup||r.tipoSetup,
+          tipoRetrabalho:o.tipoRetrabalho||r.tipoRetrabalho,
+          dur, openTs:o.ts, closeTs:r.ts, pairedById:false
+        });
+        // Fix: _used=true APENAS quando o par é aceito (não no caso durReal inválido)
+        opens[best]._used=true;
+      }
+      // Se durReal inválido: ABERTURA permanece disponível para outro FECHAMENTO
+    }
+  });
+
   return pairs;
 }
 

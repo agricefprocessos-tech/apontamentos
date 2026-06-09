@@ -61,6 +61,7 @@ function doGet(e) {
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'getCadastros')     return getCadastros();
+  if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
   if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
     try {
@@ -265,6 +266,22 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'previewAberturasOrfas' && e.parameter.key === 'AGF2026') {
+    try {
+      const cutoff = e.parameter.cutoff || '2026-05-29';
+      return jsonResponse(previewAberturasOrfas(cutoff));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'deletarAberturasOrfas' && e.parameter.key === 'AGF2026') {
+    try {
+      const cutoff = e.parameter.cutoff || '2026-05-29';
+      return jsonResponse(deletarAberturasOrfas(cutoff));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
 
   // Ações via payload GET (contorna CORS)
   if (e.parameter.payload) {
@@ -276,6 +293,18 @@ function doGet(e) {
       if (payload.action === 'removerSerie')     return removerSerie(payload);
       if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
       if (payload.action === 'removerOperacao')  return removerOperacao(payload);
+      // Localizar linhas por identificadores (func+ts) para deleção
+      if (payload.action === 'localizarLinhas' && payload.key === 'AGF2026') {
+        return jsonResponse(localizarLinhasPorIdentificadores(payload.identifiers || [], payload.deletar === true));
+      }
+      // Deletar linhas por número (mais preciso que func+ts)
+      if (payload.action === 'deletarPorLinhas' && payload.key === 'AGF2026') {
+        return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, payload.tiposPermitidos || null));
+      }
+      // Endpoint dedicado: deletar FECHAMENTOs sem ABERTURA (aceita apenas tipo FECHAMENTO)
+      if (payload.action === 'deletarFechamentosOrfaos' && payload.key === 'AGF2026') {
+        return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, ['FECHAMENTO']));
+      }
       return gravarApontamento(payload);
     } catch (err) {
       return jsonResponse({ success: false, message: 'Erro ao processar payload: ' + err.message });
@@ -299,6 +328,19 @@ function doPost(e) {
     if (payload.action === 'removerSerie')     return removerSerie(payload);
     if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
     if (payload.action === 'removerOperacao')  return removerOperacao(payload);
+    if (payload.action === 'localizarLinhas' && payload.key === 'AGF2026') {
+      return jsonResponse(localizarLinhasPorIdentificadores(payload.identifiers || [], payload.deletar === true));
+    }
+    if (payload.action === 'deletarPorLinhas' && payload.key === 'AGF2026') {
+      return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, payload.tiposPermitidos || null));
+    }
+    if (payload.action === 'deletarFechamentosOrfaos' && payload.key === 'AGF2026') {
+      return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, ['FECHAMENTO']));
+    }
+    // Fix#ID-LINK: endpoint de migração histórica — escreve abertoId em linhas específicas
+    if (payload.action === 'migrarIds' && payload.key === 'AGF2026') {
+      return jsonResponse(migrarIdsHistoricos(payload.updates || []));
+    }
     return gravarApontamento(payload);
   } catch (err) {
     return jsonResponse({ success: false, message: 'Erro: ' + err.message });
@@ -594,7 +636,8 @@ function gravarApontamento(payload) {
     }
 
     // ID único para o registro na aba Abertos (gerado uma vez por abertura)
-    // Fechamentos recebem o ID do frontend via payload.abertoId
+    // Fix#ID-LINK: Fechamentos gravam o abertoId da Abertura que estão fechando (não um ID aleatório)
+    // Isso cria o elo direto ABERTURA↔FECHAMENTO na planilha para pareamento sem algoritmo
     const abertoId = tiposAbertura.includes(tipo) ? gerarIdApontamento() : null;
 
     const nomeOperador  = payload.operadorNome || payload.operador || '';
@@ -653,8 +696,15 @@ function gravarApontamento(payload) {
       payload.setup      || '',      // M
       payload.obs2       || '',      // N
       qtdPlanejada,                  // O — quantidade planejada
-      abertoId || gerarIdApontamento(), // P — Bug#30 fix: abertura usa abertoId (=col 12 de Abertos)
-                                        //   fechamento gera ID próprio (não tem abertoId)
+      // Fix#ID-LINK: col P = "elo de pareamento"
+      // • ABERTURA  → abertoId (novo ID gerado acima)
+      // • FECHAMENTO → payload.abertoId (ID da ABERTURA sendo fechada, validado antes)
+      // • Parada/Retrabalho → ID próprio (não participa do pareamento AB↔FE)
+      tiposAbertura.includes(tipo)
+        ? abertoId
+        : (tiposFechamento.includes(tipo) && String(payload.abertoId || '').trim())
+          ? String(payload.abertoId).trim()
+          : gerarIdApontamento(), // P
     ];
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
@@ -703,7 +753,7 @@ function gravarApontamento(payload) {
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
         linhaMod[6]  = qtdRePorSerie;          // G — qtd realizada por série
         linhaMod[14] = String(qtdPlPorSerie);  // O — qtd planejada por série
-        linhaMod[15] = abertoId || gerarIdApontamento(); // P — Bug#30: lote usa abertoId comum
+        linhaMod[15] = abertoId; // P — lote: todas as séries compartilham o mesmo abertoId (Fix#ID-LINK)
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
@@ -870,6 +920,52 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
 // ================================================================
 // CADASTROS DINÂMICOS
 // ================================================================
+
+// ================================================================
+// GET ABERTOS — lê a aba "Abertos" e retorna os registros abertos
+// Chamado pelo dashboard via ?action=getAbertos
+// ================================================================
+function getAbertosAction() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_ABERTOS);
+    if (!aba) return jsonResponse({ success: true, abertos: [] });
+    const dados = aba.getDataRange().getValues();
+    if (dados.length <= 1) return jsonResponse({ success: true, abertos: [] });
+    const abertos = [];
+    for (let i = 1; i < dados.length; i++) {
+      const row = dados[i];
+      if (!row[0]) continue; // linha vazia
+      let loteSeries = null;
+      if (row[11]) {
+        try { loteSeries = JSON.parse(String(row[11])); } catch(e) {}
+      }
+      // col 4 (Carimbo) pode ser Date object no GAS — formatar como string dd/MM/yyyy HH:mm:ss
+      const carimboRaw = row[4];
+      const carimboStr = carimboRaw instanceof Date
+        ? Utilities.formatDate(carimboRaw, 'GMT-3', 'dd/MM/yyyy HH:mm:ss')
+        : String(carimboRaw || '');
+      abertos.push({
+        operador:       String(row[0]  || ''),
+        implemento:     String(row[1]  || ''),
+        tipo:           String(row[2]  || ''),
+        operacao:       String(row[3]  || ''),
+        carimbo:        carimboStr,
+        codItem:        String(row[5]  || ''),
+        qtdPlanejada:   String(row[6]  || ''),
+        nrSerie:        String(row[7]  || ''),
+        implementoNome: String(row[8]  || ''),
+        cliente:        String(row[9]  || ''),
+        operadorNome:   String(row[10] || ''),
+        loteSeries:     loteSeries,
+        abertoId:       String(row[12] || ''),
+      });
+    }
+    return jsonResponse({ success: true, abertos: abertos });
+  } catch(err) {
+    return jsonResponse({ success: false, erro: err.message });
+  }
+}
 
 function getCadastros() {
   try {
@@ -3906,6 +4002,418 @@ function impactoOrfaos() {
       horasEstimadas: (minutosPerdidosEstimados / 60).toFixed(1),
       obs: 'Estimativa de horas de produção representadas pelos pares órfãos (ABERTURA+FECHAMENTO sem par entre si)'
     }
+  };
+}
+
+// ================================================================
+// PREVIEW / DELETAR ABERTURAS ÓRFÃS HISTÓRICAS
+//
+// Identifica ABERTURAs sem FECHAMENTO correspondente com timestamp
+// até a data de corte (cutoff), e opcionalmente as remove.
+//
+// Preview:  ?action=previewAberturasOrfas&key=AGF2026&cutoff=2026-05-29
+// Deletar:  ?action=deletarAberturasOrfas&key=AGF2026&cutoff=2026-05-29
+//
+// A lógica de emparelhamento usa durReal (minutos reais de relógio),
+// idêntica à correção aplicada no dashboard (não usa workMinutes para
+// validar o par, evitando falsos positivos em fins de semana).
+// ================================================================
+
+function previewAberturasOrfas(cutoffDateStr) {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+  if (dados.length < 2) return { success: false, message: 'Sem dados.' };
+
+  // Cutoff: fim do dia da data informada
+  const cutoff   = cutoffDateStr ? new Date(cutoffDateStr + 'T23:59:59') : new Date('2026-05-29T23:59:59');
+  const cutoffMs = cutoff.getTime();
+
+  // ── PARSER DE DATAS — suporta Date objects, formato BR (dd/MM/yyyy HH:mm:ss)
+  //    e ISO. Garante que strings no formato brasileiro (saídas de getDadosRespostas)
+  //    sejam corretamente interpretadas.
+  function parseTs(val) {
+    if (!val && val !== 0) return null;
+    if (val instanceof Date) {
+      const ms = val.getTime();
+      return (!ms || isNaN(ms)) ? null : ms;
+    }
+    const s = String(val).trim();
+    if (!s) return null;
+    // Formato BR: dd/MM/yyyy HH:mm:ss  ou  dd/MM/yyyy, HH:mm:ss
+    const brMatch = s.match(/^(\d{2})\/(\d{2})\/(\d{4})[,\s]+(\d{2}):(\d{2}):(\d{2})/);
+    if (brMatch) {
+      const [, dd, mm, yyyy, hh, min, sec] = brMatch;
+      const ms = new Date(+yyyy, +mm - 1, +dd, +hh, +min, +sec).getTime();
+      return isNaN(ms) ? null : ms;
+    }
+    // Fallback: ISO ou qualquer outro formato reconhecível
+    const ms = new Date(s).getTime();
+    return isNaN(ms) ? null : ms;
+  }
+
+  // ── PARSE — inclui todas as linhas com timestamp válido ─────────
+  // Usa Utilities.formatDate para gerar a chave de timestamp no mesmo
+  // formato que getDadosRespostas → alinhado com o algoritmo do dashboard.
+  const records = [];
+  for (let i = 1; i < dados.length; i++) {
+    const row   = dados[i];
+    const tsRaw = row[0];
+    if (!tsRaw || (tsRaw instanceof Date && isNaN(tsRaw.getTime()))) continue;
+
+    // Gera string canônica: "dd/MM/yyyy HH:mm:ss" em GMT-3 (igual a getData)
+    let tsStr;
+    if (tsRaw instanceof Date) {
+      try { tsStr = Utilities.formatDate(tsRaw, 'GMT-3', 'dd/MM/yyyy HH:mm:ss'); }
+      catch(e) { continue; }
+    } else {
+      tsStr = String(tsRaw).trim();
+    }
+    if (!tsStr) continue;
+
+    // Converte para ms para comparação de datas (cutoff, ordenação)
+    const tsMs = parseTs(tsRaw) || parseTs(tsStr);
+    if (!tsMs) continue;
+
+    const func  = String(row[1]  || '').trim();
+    const tipo  = String(row[2]  || '').trim();
+    // Coluna D (index 3) = TIPO DE OPERAÇÃO 1  |  Coluna L (index 11) = TIPO DE OPERAÇÃO 2
+    // Dashboard usa: op = D || L  (mesmo fallback)
+    const op    = (String(row[3]  || '').trim()) || (String(row[11] || '').trim());
+    const item  = String(row[4]  || '').trim();
+    const serie = String(row[5]  || '').trim().split(' | ')[0].trim();
+
+    records.push({ sheetRow: i + 1, tsMs, tsStr, func, tipo, op, item, serie });
+  }
+
+  // Ordena cronologicamente (igual ao dashboard)
+  records.sort((a, b) => a.tsMs - b.tsMs);
+
+  // ── PAIR ROWS — réplica exata do dashboard ────────────────────────
+  // Chave de identificação: func + '||' + tsStr  (mesmo formato da dashboard)
+  function pairRows(rows, openType, closeType) {
+    const opens = [];
+    const pairedOpenKeys = new Set();  // chaves: func||tsStr
+    rows.forEach(r => {
+      if (r.tipo === openType) {
+        opens.push({ ...r, _used: false });
+      } else if (r.tipo === closeType) {
+        let best = null, bestScore = -1;
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs) continue;
+          let score = 1;
+          if (o.op    === r.op)    score += 4;
+          if (o.serie === r.serie) score += 2;
+          if (o.item  === r.item)  score += 1;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+        if (best !== null) {
+          const o       = opens[best];
+          const durReal = (r.tsMs - o.tsMs) / 60000;  // minutos reais de relógio
+          if (durReal > 0 && durReal < 10080) {         // < 7 dias reais
+            pairedOpenKeys.add(o.func + '||' + o.tsStr);
+          }
+          opens[best]._used = true;
+        }
+      }
+    });
+    return pairedOpenKeys;
+  }
+
+  const pairedOpenKeys = pairRows(records, 'ABERTURA', 'FECHAMENTO');
+
+  // ── SELECIONA ÓRFÃS ATÉ O CUTOFF ─────────────────────────────────
+  const orfas = records.filter(r =>
+    r.tipo  === 'ABERTURA' &&
+    r.func  !== ''          &&   // descarta linhas sem operador
+    r.tsMs  <= cutoffMs     &&
+    !pairedOpenKeys.has(r.func + '||' + r.tsStr)   // chave alinhada com dashboard
+  );
+
+  const fmtTs = ms => new Date(ms).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+  return {
+    success:          true,
+    cutoff:           cutoff.toLocaleDateString('pt-BR'),
+    totalRegistros:   records.length,
+    totalPares:       pairedOpenKeys.size,
+    orfasEncontradas: orfas.length,
+    items: orfas.map(r => ({
+      sheetRow: r.sheetRow,
+      ts:       r.tsStr,
+      func:     r.func,
+      op:       r.op,
+      item:     r.item,
+      serie:    r.serie
+    }))
+  };
+}
+
+function deletarAberturasOrfas(cutoffDateStr) {
+  // 1. Identificar as linhas a deletar via preview
+  const preview = previewAberturasOrfas(cutoffDateStr);
+  if (!preview.success) return preview;
+  if (preview.orfasEncontradas === 0) {
+    return { success: true, removidos: 0, message: 'Nenhuma ABERTURA órfã encontrada até ' + (cutoffDateStr || '29/05/2026') + '.' };
+  }
+
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  // 2. Ordena de baixo para cima para não deslocar índices durante a deleção
+  const linhas = preview.items.map(r => r.sheetRow).sort((a, b) => b - a);
+
+  for (const linha of linhas) {
+    aba.deleteRow(linha);
+  }
+  SpreadsheetApp.flush();
+
+  // 3. Reconstrói a aba Abertos para refletir o estado atual
+  let recResult = null;
+  try { recResult = reconstruirAbertos(); } catch(e) { recResult = { error: e.message }; }
+
+  return {
+    success:         true,
+    removidos:       linhas.length,
+    linhasDeletadas: [...linhas].reverse(), // ordem crescente p/ leitura
+    reconstruirAbertos: recResult,
+    message:         linhas.length + ' ABERTURA(s) órfã(s) removida(s). Aba Abertos reconstruída.'
+  };
+}
+
+// ================================================================
+// LOCALIZAR LINHAS POR IDENTIFICADORES (func + ts)
+//
+// Recebe uma lista de {func, ts} vindos do algoritmo do dashboard
+// (executado no browser via getData) e localiza os números de linha
+// exatos na planilha Respostas, para deleção segura.
+//
+// Chamada via POST com payload:
+//   { action: 'localizarLinhas', key: 'AGF2026',
+//     identifiers: [{func, ts}, ...], deletar: false }
+//
+// ts deve estar no formato 'dd/MM/yyyy HH:mm:ss' (sem vírgula),
+// igual ao produzido por getDadosRespostas / Utilities.formatDate.
+// ================================================================
+
+// ================================================================
+// Fix#ID-LINK — MIGRAÇÃO HISTÓRICA DE IDs
+//
+// Recebe lista de {sheetRow, abertoId} e escreve o abertoId na
+// coluna P (col 16) de cada linha especificada da aba Respostas.
+//
+// Usado APENAS UMA VEZ para linkar registros históricos.
+// Operação idempotente: se col P já tem o mesmo ID, não faz nada.
+// ================================================================
+function migrarIdsHistoricos(updates) {
+  if (!updates || updates.length === 0) {
+    return { success: false, message: 'Lista de updates vazia.' };
+  }
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const lastRow = aba.getLastRow();
+  if (lastRow < 2) return { success: false, message: 'Aba sem dados.' };
+
+  // Leitura em bulk: toda a coluna P de uma vez (muito mais rápido que célula a célula)
+  const numDataRows = lastRow - 1; // linha 1 = cabeçalho
+  const colPRange   = aba.getRange(2, 16, numDataRows, 1);
+  const colPValues  = colPRange.getValues(); // [[val], [val], ...]
+
+  let atualizados = 0, ignorados = 0, erros = [], dirty = false;
+
+  for (const upd of updates) {
+    const row = parseInt(upd.sheetRow);
+    const id  = String(upd.abertoId || '').trim();
+    if (!row || row < 2 || row > lastRow || !id) {
+      erros.push('Linha inválida ou ID vazio: ' + JSON.stringify(upd));
+      continue;
+    }
+    const idx   = row - 2; // 0-indexed no array
+    const atual = String(colPValues[idx][0] || '').trim();
+    if (atual === id) { ignorados++; continue; } // idempotente: já correto
+    colPValues[idx][0] = id;
+    atualizados++;
+    dirty = true;
+  }
+
+  // Escrita em bulk: uma única chamada para toda a coluna
+  if (dirty) {
+    colPRange.setValues(colPValues);
+    SpreadsheetApp.flush();
+  }
+
+  return {
+    success: true,
+    total: updates.length,
+    atualizados,
+    ignorados,
+    erros: erros.length > 0 ? erros : undefined,
+    message: atualizados + ' linha(s) atualizadas, ' + ignorados + ' já corretas.',
+  };
+}
+
+// ================================================================
+// Deletar linhas por número de linha da planilha (col A = Carimbo de data/hora).
+// Verifica que cada linha é do tipo ABERTURA antes de remover.
+// dryRun=true → apenas lista o que seria deletado, sem apagar.
+// ================================================================
+function deletarLinhasPorNumero(rows, dryRun, tiposPermitidos) {
+  // tiposPermitidos: array de tipos aceitos para deleção (default: ['ABERTURA'])
+  const tipos = Array.isArray(tiposPermitidos) && tiposPermitidos.length > 0
+    ? tiposPermitidos
+    : ['ABERTURA'];
+  if (!rows || rows.length === 0) {
+    return { success: false, message: 'Lista de linhas vazia.' };
+  }
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const lastRow = aba.getLastRow();
+
+  // Ler todos os dados uma vez (bulk)
+  const dados = aba.getRange(1, 1, lastRow, 20).getValues();
+
+  const confirmadas = [];  // linhas válidas (ABERTURA confirmada)
+  const rejeitadas  = [];  // linhas que não são ABERTURA ou fora do range
+
+  for (const rowNum of rows) {
+    const r = parseInt(rowNum);
+    if (!r || r < 2 || r > lastRow) {
+      rejeitadas.push({ row: r, motivo: 'fora do range' });
+      continue;
+    }
+    const tipo = String(dados[r - 1][2] || '').trim(); // col C = tipo
+    const func = String(dados[r - 1][1] || '').trim(); // col B = operador
+    const ts   = dados[r - 1][0];                      // col A = timestamp
+    if (!tipos.includes(tipo)) {
+      rejeitadas.push({ row: r, tipo, func, motivo: 'tipo não permitido (permitidos: ' + tipos.join(',') + ')' });
+      continue;
+    }
+    let tsStr;
+    try { tsStr = ts instanceof Date ? Utilities.formatDate(ts, 'GMT-3', 'dd/MM/yyyy HH:mm:ss') : String(ts).trim(); }
+    catch(e) { tsStr = String(ts); }
+    confirmadas.push({ row: r, ts: tsStr, func });
+  }
+
+  if (dryRun) {
+    return {
+      success: true,
+      dryRun: true,
+      totalSolicitado: rows.length,
+      confirmadas: confirmadas.length,
+      rejeitadas: rejeitadas.length,
+      detalheRejeitadas: rejeitadas,
+      amostraConfirmadas: confirmadas.slice(0, 10),
+      message: 'DRY-RUN: ' + confirmadas.length + ' linha(s) seriam deletadas, ' + rejeitadas.length + ' rejeitadas.'
+    };
+  }
+
+  // Deletar de baixo para cima para não deslocar índices
+  const linhasOrdenadas = confirmadas.map(r => r.row).sort((a, b) => b - a);
+  for (const linha of linhasOrdenadas) {
+    aba.deleteRow(linha);
+  }
+  SpreadsheetApp.flush();
+
+  // Reconstruir aba de abertos
+  let recResult = null;
+  try { recResult = reconstruirAbertos(); } catch(e) { recResult = { error: e.message }; }
+
+  return {
+    success: true,
+    totalSolicitado: rows.length,
+    deletados: linhasOrdenadas.length,
+    rejeitadas: rejeitadas.length,
+    detalheRejeitadas: rejeitadas.length > 0 ? rejeitadas : undefined,
+    reconstruirAbertos: recResult,
+    message: linhasOrdenadas.length + ' linha(s) deletada(s). ' + rejeitadas.length + ' rejeitada(s) (tipo != ABERTURA ou fora do range).'
+  };
+}
+
+function localizarLinhasPorIdentificadores(identifiers, deletar) {
+  if (!identifiers || identifiers.length === 0) {
+    return { success: false, message: 'Lista de identificadores vazia.' };
+  }
+
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  // Constrói Set de chaves: "func|||ts"
+  const keysAlvo = new Set(identifiers.map(id => id.func + '|||' + id.ts));
+
+  const dados = aba.getDataRange().getValues();
+  const linhasEncontradas = [];
+  const naoEncontrados = [...keysAlvo]; // debug: quais não foram achados
+
+  for (let i = 1; i < dados.length; i++) {
+    const row    = dados[i];
+    const tsRaw  = row[0];
+    const func   = String(row[1] || '').trim();
+    const tipo   = String(row[2] || '').trim();
+    if (tipo !== 'ABERTURA') continue; // só ABERTURAs
+
+    let tsStr;
+    if (tsRaw instanceof Date) {
+      try { tsStr = Utilities.formatDate(tsRaw, 'GMT-3', 'dd/MM/yyyy HH:mm:ss'); }
+      catch(e) { continue; }
+    } else if (tsRaw) {
+      tsStr = String(tsRaw).trim();
+    } else {
+      continue;
+    }
+
+    const chave = func + '|||' + tsStr;
+    if (keysAlvo.has(chave)) {
+      const op    = String(row[3]  || '').trim() || String(row[11] || '').trim();
+      const item  = String(row[4]  || '').trim();
+      const serie = String(row[5]  || '').trim().split(' | ')[0].trim();
+      linhasEncontradas.push({ sheetRow: i + 1, ts: tsStr, func, op, item, serie });
+      // Remove do conjunto de não-encontrados
+      const idx = naoEncontrados.indexOf(chave);
+      if (idx >= 0) naoEncontrados.splice(idx, 1);
+    }
+  }
+
+  if (!deletar) {
+    return {
+      success:        true,
+      buscados:       keysAlvo.size,
+      encontrados:    linhasEncontradas.length,
+      naoEncontrados: naoEncontrados.length,
+      items:          linhasEncontradas
+    };
+  }
+
+  // ── DELETAR ─────────────────────────────────────────────────────
+  if (linhasEncontradas.length === 0) {
+    return { success: true, removidos: 0, message: 'Nenhuma linha localizada para deleção.' };
+  }
+
+  const linhas = linhasEncontradas.map(r => r.sheetRow).sort((a, b) => b - a); // desc
+  for (const linha of linhas) {
+    aba.deleteRow(linha);
+  }
+  SpreadsheetApp.flush();
+
+  let recResult = null;
+  try { recResult = reconstruirAbertos(); } catch(e) { recResult = { error: e.message }; }
+
+  return {
+    success:         true,
+    buscados:        keysAlvo.size,
+    removidos:       linhas.length,
+    naoEncontrados:  naoEncontrados.length,
+    linhasDeletadas: [...linhas].reverse(),
+    reconstruirAbertos: recResult,
+    message:         linhas.length + ' linha(s) deletada(s). ' + naoEncontrados.length + ' identificador(es) não localizado(s).'
   };
 }
 
