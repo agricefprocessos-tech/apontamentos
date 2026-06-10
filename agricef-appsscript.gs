@@ -359,53 +359,137 @@ function verificarAberto(operador, implemento) {
     const dados = aba.getDataRange().getValues();
 
     // Colunas aba Abertos:
-    // 0:Operador 1:Implemento 2:Tipo 3:Operação 4:Carimbo
-    // 5:CodItem  6:QtdPlanejada 7:NrSerie 8:Implemento 9:Cliente 10:OperadorNome
+    // 0:Operador 1:Implemento(nrSerie) 2:Tipo 3:Operação 4:Carimbo
+    // 5:CodItem  6:QtdPlanejada 7:NrSerie 8:ImplementoNome 9:Cliente 10:OperadorNome
+    // 11:LoteSeries(JSON) 12:AbertoId
 
     for (let i = 1; i < dados.length; i++) {
-      const row   = dados[i];
-      if (!row[0]) continue; // pula linha completamente vazia
-      if (mesmoOperador(row[0], operador)) {
+      const row = dados[i];
+      if (!row[0]) continue;
+      if (!mesmoOperador(row[0], operador)) continue;
 
-        // Bug#29/30/31: a cross-validação foi removida daqui.
-        // Motivo: verificarAberto é uma operação de LEITURA — fazer
-        // deleções aqui causava condição de corrida com gravarApontamento
-        // e apagava registros legítimos quando os IDs ainda não estavam
-        // sincronizados (pré-Bug#30) ou quando reconstruirAbertos usava
-        // o ID da coluna P de Respostas como abertoId de Abertos.
-        //
-        // A detecção e remoção de registros fantasmas é feita por:
-        //   1. gravarApontamento — cross-valida antes de bloquear por poka-yoke
-        //   2. reconstruirAbertos — trigger periódico de 30 min reconstrói
-        //      Abertos inteiramente a partir de Respostas
-        //
-        // Isso garante que: (a) operações de leitura não têm efeitos colaterais,
-        // (b) limpeza acontece no momento correto (escrita ou ciclo periódico).
+      const abertoIdAbertos = String(row[12] || '').trim();
 
-        let loteSeries = null;
-        if (row[11]) {
-          try { loteSeries = JSON.parse(String(row[11])); } catch(e) {}
+      // ── Cross-validação read-only: garante que o abertoId de Abertos existe em Respostas ──
+      // Lê apenas a coluna P (índice 16) — operação leve, sem efeitos colaterais.
+      // Se não encontrar, trata como fantasma e busca em Respostas diretamente.
+      if (abertoIdAbertos) {
+        const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+        let idValidoEmRe = false;
+        if (abaRe) {
+          const ultimaLinhaRe = abaRe.getLastRow();
+          if (ultimaLinhaRe > 1) {
+            const colP = abaRe.getRange(2, 16, ultimaLinhaRe - 1, 1).getValues();
+            idValidoEmRe = colP.some(r => String(r[0] || '').trim() === abertoIdAbertos);
+          }
         }
-        return jsonResponse({
-          aberto:        true,
-          tipo:          String(row[2]  || ''),
-          operacao:      String(row[3]  || ''),  // Bug#24 fix: Sheets retorna number para células numéricas
-          carimbo:       formatarCarimboGs(row[4]),
-          codItem:       String(row[5]  || ''),
-          qtdPlanejada:  row[6]  || '',          // mantém número — frontend usa aritmética
-          nrSerie:       String(row[7]  || ''),  // Bug#24b fix: nrSerie numérica (ex: 22000084)
-          implemento:    String(row[8]  || ''),
-          cliente:       String(row[9]  || ''),
-          operadorNome:  String(row[10] || ''),
-          loteSeries:    loteSeries,
-          abertoId:      String(row[12] || ''),  // ID único gerado na abertura
-        });
+        if (!idValidoEmRe) {
+          // Abertos tem um abertoId que não existe em Respostas → fantasma.
+          // Busca a abertura real diretamente em Respostas (fallback completo).
+          // A limpeza do fantasma será feita por reconstruirAbertos (próximo ciclo de 30 min)
+          // ou por gravarApontamento na próxima escrita.
+          const abertaReal = buscarAberturaAbertaEmRespostas_(ss, operador);
+          if (abertaReal) {
+            return jsonResponse({ aberto: true, loteSeries: null, ...abertaReal });
+          }
+          return jsonResponse({ aberto: false });
+        }
       }
+
+      // ── Registro válido em Abertos ──
+      let loteSeries = null;
+      if (row[11]) {
+        try { loteSeries = JSON.parse(String(row[11])); } catch(e) {}
+      }
+      return jsonResponse({
+        aberto:        true,
+        tipo:          String(row[2]  || ''),
+        operacao:      String(row[3]  || ''),  // Bug#24: Sheets pode retornar number em células numéricas
+        carimbo:       formatarCarimboGs(row[4]),
+        codItem:       String(row[5]  || ''),
+        qtdPlanejada:  row[6]  || '',          // mantém número — frontend usa aritmética
+        nrSerie:       String(row[7]  || ''),  // Bug#24b: nrSerie numérica (ex: 22000084)
+        implemento:    String(row[8]  || ''),
+        cliente:       String(row[9]  || ''),
+        operadorNome:  String(row[10] || ''),
+        loteSeries:    loteSeries,
+        abertoId:      abertoIdAbertos,
+      });
     }
+
+    // ── Fallback: operador não encontrado em Abertos — busca diretamente em Respostas ──
+    // Isso resolve casos onde reconstruirAbertos ainda não rodou após uma ABERTURA recente,
+    // ou quando Abertos ficou desincronizado por qualquer motivo.
+    const abertaEmRe = buscarAberturaAbertaEmRespostas_(ss, operador);
+    if (abertaEmRe) {
+      return jsonResponse({ aberto: true, loteSeries: null, ...abertaEmRe });
+    }
+
     return jsonResponse({ aberto: false });
   } catch (err) {
     return jsonResponse({ aberto: false, erro: err.message });
   }
+}
+
+// ================================================================
+// HELPER: busca a última ABERTURA sem FECHAMENTO em Respostas para um operador
+// ================================================================
+
+/**
+ * Varre Respostas do início ao fim e retorna os dados da última ABERTURA
+ * que NÃO possui um FECHAMENTO subsequente para o mesmo operador.
+ *
+ * Retorna null se o operador não tiver nenhuma abertura em aberto em Respostas.
+ *
+ * Lógica: para cada linha de Respostas do operador:
+ *   - ABERTURA → registra como "aberta"
+ *   - FECHAMENTO → anula a abertura anterior (delete)
+ * No final, o que sobrou é a abertura genuinamente em aberto.
+ *
+ * Custo: leitura sequencial de Respostas (~1-2s para 4000+ linhas).
+ * Só é chamado em fallback (Abertos inconsistente ou fantasma), não em fluxo normal.
+ */
+function buscarAberturaAbertaEmRespostas_(ss, operador) {
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!abaRe) return null;
+  const dadosRe = abaRe.getDataRange().getValues();
+
+  let aberta = null;
+
+  for (let i = 1; i < dadosRe.length; i++) {
+    const row    = dadosRe[i];
+    const opRow  = String(row[1] || '').trim();
+    if (!opRow || !mesmoOperador(opRow, operador)) continue;
+
+    const tipo = String(row[2] || '').trim();
+
+    if (ehAbertura(tipo)) {
+      // Desmembra campo F: "nrSerie | implementoNome | cliente"
+      const campoF     = String(row[5] || '');
+      const partes     = campoF.split(' | ');
+      const nrSerie    = (partes[0] || '').trim();
+      const implemento = (partes[1] || '').trim();
+      const cliente    = (partes[2] || '').trim();
+
+      aberta = {
+        tipo:          tipo,
+        operacao:      String(row[3]  || '').trim(),
+        carimbo:       formatarCarimboGs(row[0]),
+        codItem:       String(row[4]  || '').trim(),
+        qtdPlanejada:  row[14] || '',    // coluna O
+        nrSerie:       nrSerie,
+        implemento:    implemento,
+        cliente:       cliente,
+        operadorNome:  opRow,
+        abertoId:      String(row[15] || '').trim(), // coluna P
+      };
+
+    } else if (ehFechamento(tipo)) {
+      aberta = null; // FECHAMENTO cancela a última abertura
+    }
+  }
+
+  return aberta; // null se não há abertura em aberto
 }
 
 // ================================================================
@@ -1225,13 +1309,24 @@ function gerarIdApontamento() {
 //   3. String já em pt-BR — retorna como está
 function formatarCarimboGs(val) {
   if (!val) return '';
-  // Caso 1: objeto Date
+  // Caso 1: objeto Date (Google Sheets auto-detectou célula como data)
   if (val instanceof Date) return Utilities.formatDate(val, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
   const s = String(val).trim();
   if (!s) return '';
-  // Caso 3: já no formato dd/MM/yyyy
+  // Caso 2: já no formato dd/MM/yyyy
   if (/^\d{2}\/\d{2}\/\d{4}/.test(s)) return s;
-  // Caso 2: string inglesa "Thu May 14 2026 12:15:07 GMT-0300 ..."
+  // Caso 3: ISO timestamp "2026-06-09T18:52:00.000Z" ou "2026-06-09T18:52:00Z"
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    try {
+      const d = new Date(s);
+      if (!isNaN(d.getTime()) && d.getFullYear() >= 2020) {
+        return Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+      }
+    } catch(e) {}
+    return s; // fallback: devolve como está
+  }
+  // Caso 4: string inglesa "Thu May 14 2026 12:15:07 GMT-0300 ..."
+  // (GAS converte Date → String com toLocaleString inglês)
   // Extrai componentes via regex — não depende de new Date() que pode falhar com caracteres especiais
   const m = s.match(/\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
   if (m) {
@@ -1549,9 +1644,14 @@ function reconstruirAbertos() {
     const row = dadosRe[i];
     if (!row[0] && !row[1]) continue; // linha vazia
 
-    // Ignora registros ISO antigos (carimbo legado 1899-12-30T...)
-    const carimboBruto = String(row[0] || '');
-    if (carimboBruto.includes('T') || carimboBruto.includes('1899')) continue;
+    // Normaliza o carimbo para DD/MM/YYYY HH:mm:ss usando formatarCarimboGs().
+    // ATENÇÃO: NÃO usar String(row[0]) diretamente — quando Sheets armazena a célula
+    // como objeto Date, String(date) retorna "Tue Jun 09 2026 15:55:28 GMT-0" que
+    // contém 'T' em "Tue", "Thu" e "GMT", fazendo a checagem includes('T') pular
+    // TODOS os registros recentes (bug crítico que causava operadores sumirem de Abertos).
+    const carimboBruto = formatarCarimboGs(row[0]);
+    // Pula apenas: linhas sem carimbo válido ou datas legadas 1899 (artefato de célula vazia no Sheets)
+    if (!carimboBruto || carimboBruto.includes('1899')) continue;
 
     const tipo        = String(row[2] || '').trim();
     const operadorRaw = String(row[1] || '').trim();
