@@ -1,5 +1,5 @@
 // ================================================================
-// AGRICEF — Web App Apps Script v4.2 (deploy 14/05/2026)
+// AGRICEF — Web App Apps Script v4.3 (deploy 15/06/2026)
 //
 // Colunas da planilha (inalteradas):
 //   A  Carimbo de data/hora
@@ -26,6 +26,46 @@ const ABA_OPERADORES  = 'Cadastro_Operadores';
 const ABA_SALDO       = 'Saldo_Parcial';
 const ABA_SERIES      = 'Cadastro_Series';
 const ABA_OPERACOES   = 'Cadastro_Operacoes';
+
+// ================================================================
+// SCHEMA DE COLUNAS (0-indexed)
+// REGRA: nenhum código usa row[N] literal — usa COL_RE.CAMPO ou COL_AB.CAMPO.
+// Se uma coluna for adicionada/movida, altere APENAS estes objetos.
+// ================================================================
+const COL_RE = {
+  CARIMBO:         0,  // A  Carimbo de data/hora
+  OPERADOR:        1,  // B  NOME DO OPERADOR
+  TIPO:            2,  // C  TIPO DE APONTAMENTO
+  OPERACAO:        3,  // D  TIPO DE OPERAÇÃO 1
+  COD_ITEM:        4,  // E  CÓDIGO DO ITEM
+  SERIE:           5,  // F  Nº SERIE | IMPLEMENTO | CLIENTE
+  QTD:             6,  // G  QUANTIDADE
+  OBS1:            7,  // H  OBSERVAÇÃO 1
+  TIPO_RETRAB:     8,  // I  TIPOS DE RETRABALHOS
+  NR_RNC:          9,  // J  Nº DA RNC
+  TIPO_PARADA:     10, // K  TIPOS DE PARADA
+  OPERACAO2:       11, // L  TIPO DE OPERAÇÃO 2
+  TIPO_SETUP:      12, // M  TIPO DE OPERAÇÃO DE SET-UP
+  OBS2:            13, // N  OBSERVAÇÃO 2
+  QTD_PLANEJADA:   14, // O  QTD PLANEJADA
+  ABERTO_ID:       15, // P  ID (abertoId AP-XXXXXXXXXX)
+};
+
+const COL_AB = {
+  OPERADOR:        0,  // código do operador
+  IMPLEMENTO:      1,  // nrSerie / implemento
+  TIPO:            2,  // tipo de apontamento
+  OPERACAO:        3,  // operação
+  CARIMBO:         4,  // carimbo da abertura
+  COD_ITEM:        5,  // código do item
+  QTD_PLANEJADA:   6,  // quantidade planejada
+  NR_SERIE:        7,  // nrSerie
+  IMPLEMENTO_NOME: 8,  // nome do implemento
+  CLIENTE:         9,  // cliente
+  OPERADOR_NOME:   10, // nome do operador
+  LOTE_SERIES:     11, // JSON de lote de séries
+  ABERTO_ID:       12, // abertoId (AP-XXXXXXXXXX)
+};
 
 const TIPOS_APONTAMENTO = {
   'ABERTURA':           'ABERTURA',
@@ -311,6 +351,41 @@ function doGet(e) {
     }
   }
 
+  if (action === 'smokeTest' && e.parameter.key === 'AGF2026') {
+    try {
+      return jsonResponse(smokeTest());
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+  if (action === 'forceMatchOrfaos' && e.parameter.key === 'AGF2026') {
+    try {
+      const dryRun  = e.parameter.dryRun !== 'false';   // default: true (seguro)
+      const cutoff  = e.parameter.cutoff || '2026-06-08';
+      return jsonResponse(forceMatchOrfaos(dryRun, cutoff));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+
+  if (action === 'excluirFechamentosOrfaos' && e.parameter.key === 'AGF2026') {
+    try {
+      const dryRun = e.parameter.dryRun !== 'false';
+      return jsonResponse(excluirFechamentosOrfaos(dryRun));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+
+  if (action === 'excluirAberturasOrfas' && e.parameter.key === 'AGF2026') {
+    try {
+      const dryRun = e.parameter.dryRun !== 'false';
+      return jsonResponse(excluirAberturasOrfas(dryRun));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
+
   return jsonResponse({ status: 'ok', message: 'AGRICEF Web App v4 ativo' });
 }
 
@@ -388,7 +463,9 @@ function verificarAberto(operador, implemento) {
           // Busca a abertura real diretamente em Respostas (fallback completo).
           // A limpeza do fantasma será feita por reconstruirAbertos (próximo ciclo de 30 min)
           // ou por gravarApontamento na próxima escrita.
-          const abertaReal = buscarAberturaAbertaEmRespostas_(ss, operador);
+          // Bug#fix2: Respostas col B armazena operadorNome (nome), não código — passar ambos
+          const operadorNomeFallback = String(row[10] || '').trim();
+          const abertaReal = buscarAberturaAbertaEmRespostas_(ss, operador, operadorNomeFallback);
           if (abertaReal) {
             return jsonResponse({ aberto: true, loteSeries: null, ...abertaReal });
           }
@@ -449,21 +526,30 @@ function verificarAberto(operador, implemento) {
  * Custo: leitura sequencial de Respostas (~1-2s para 4000+ linhas).
  * Só é chamado em fallback (Abertos inconsistente ou fantasma), não em fluxo normal.
  */
-function buscarAberturaAbertaEmRespostas_(ss, operador) {
+function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
   const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
   if (!abaRe) return null;
   const dadosRe = abaRe.getDataRange().getValues();
+
+  // Bug#fix: ehAbertura/ehFechamento são closures de outra função — definir localmente
+  const _tiposAbSet = new Set([TIPOS_APONTAMENTO.ABERTURA, TIPOS_APONTAMENTO.INICIO_RETRABALHO, TIPOS_APONTAMENTO.INICIO_PARADA].map(function(v){return v.normalize('NFC');}));
+  const _tiposFeSet = new Set([TIPOS_APONTAMENTO.FECHAMENTO, TIPOS_APONTAMENTO.TERMINO_RETRABALHO, TIPOS_APONTAMENTO.TERMINO_PARADA].map(function(v){return v.normalize('NFC');}));
+  const _ehAb = function(t) { return _tiposAbSet.has(String(t || '').normalize('NFC')); };
+  const _ehFe = function(t) { return _tiposFeSet.has(String(t || '').normalize('NFC')); };
 
   let aberta = null;
 
   for (let i = 1; i < dadosRe.length; i++) {
     const row    = dadosRe[i];
     const opRow  = String(row[1] || '').trim();
-    if (!opRow || !mesmoOperador(opRow, operador)) continue;
+    // Bug#fix2: Respostas col B armazena operadorNome (nome completo), não código.
+    // Comparar contra ambos: código (operador) e nome (operadorNome).
+    const matchOp = mesmoOperador(opRow, operador) || (operadorNome && mesmoOperador(opRow, operadorNome));
+    if (!opRow || !matchOp) continue;
 
     const tipo = String(row[2] || '').trim();
 
-    if (ehAbertura(tipo)) {
+    if (_ehAb(tipo)) {
       // Desmembra campo F: "nrSerie | implementoNome | cliente"
       const campoF     = String(row[5] || '');
       const partes     = campoF.split(' | ');
@@ -484,7 +570,7 @@ function buscarAberturaAbertaEmRespostas_(ss, operador) {
         abertoId:      String(row[15] || '').trim(), // coluna P
       };
 
-    } else if (ehFechamento(tipo)) {
+    } else if (_ehFe(tipo)) {
       aberta = null; // FECHAMENTO cancela a última abertura
     }
   }
@@ -600,24 +686,37 @@ function gravarApontamento(payload) {
             }
           }
 
-          // Bug#6 fix: idempotência — se a abertura já existe para o mesmo operador+série+tipo,
-          // retorna sucesso com o abertoId existente (recuperação de phantom record)
+          // Bug#6 fix (revisado): idempotência para phantom record recovery.
+          // Antes retornava success:true — isso causava aceitação silenciosa de duplas aberturas (E4b/E5b/E6b/E7b).
+          // Agora sempre retorna success:false.
+          // O abertoId ainda é incluído para que o frontend possa recuperar um phantom sem double-gravar.
           const mesmoTipo  = tipoExistente === (TIPOS_APONTAMENTO[tipo] || tipo);
           const mesmaSerie = serieExistente === String(payload.nrSerie || '').trim();
           if (mesmoTipo && mesmaSerie && abertoIdExistente) {
             return jsonResponse({
-              success: true,
-              abertoId: abertoIdExistente,
-              message: 'Apontamento já estava em aberto — abertoId retornado para continuidade.',
+              success: false,
+              bloqueado: true,
               jaAberto: true,
+              abertoId: abertoIdExistente,
+              message: 'Apontamento em aberto — feche antes de abrir novo.',
+              aberto: {
+                tipo:         tipoExistente,
+                operacao:     dadosAbertos[i][3] || '',
+                carimbo:      formatarCarimboGs(dadosAbertos[i][4]),
+                codItem:      dadosAbertos[i][5] || '',
+                qtdPlanejada: dadosAbertos[i][6] || '',
+                nrSerie:      serieExistente,
+                implemento:   dadosAbertos[i][8] || '',
+                cliente:      dadosAbertos[i][9] || '',
+              },
             });
           }
-          // Bloqueado por abertura diferente — inclui abertoId para o frontend recuperar
+          // Bloqueado por abertura de tipo/série diferente — inclui abertoId para o frontend recuperar
           return jsonResponse({
             success: false,
             bloqueado: true,
             message: 'Operador já possui apontamento em aberto. Feche-o antes de iniciar um novo.',
-            abertoId: abertoIdExistente, // Bug#6 fix: frontend usa para fechar o phantom
+            abertoId: abertoIdExistente, // frontend usa para identificar o apontamento existente
             aberto: {
               tipo:         tipoExistente,
               operacao:     dadosAbertos[i][3] || '',
@@ -994,7 +1093,14 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
       const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
       const matchOp = !matchId && mesmoOperador(dados[i][0], operador);
       if (matchId || matchOp) {
-        aba.deleteRow(i + 1);
+        // Bug fix: Google Sheets não permite excluir TODAS as linhas não-congeladas.
+        // Se esta for a última linha de dados (sheet terá só o cabeçalho), limpa o conteúdo
+        // da célula em vez de deletar a linha — evita "Não é possível excluir todas as linhas".
+        if (aba.getLastRow() <= 2) {
+          aba.getRange(i + 1, 1, 1, aba.getLastColumn() || 13).clearContent();
+        } else {
+          aba.deleteRow(i + 1);
+        }
         return;
       }
     }
@@ -1340,6 +1446,77 @@ function formatarCarimboGs(val) {
   return s;
 }
 
+/**
+ * Converte string "dd/MM/yyyy HH:mm:ss" (saída de formatarCarimboGs) em milissegundos.
+ * Evita o bug de new Date('09/06/2026') que, no V8 do GAS, interpreta DD como mês (MM/DD).
+ */
+function parseCarimboGsMs(s) {
+  if (!s) return NaN;
+  const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return NaN;
+  return new Date(
+    parseInt(m[3]),     // year
+    parseInt(m[2]) - 1, // month (0-indexed)
+    parseInt(m[1]),     // day
+    parseInt(m[4]),     // hour
+    parseInt(m[5]),     // minute
+    parseInt(m[6])      // second
+  ).getTime();
+}
+
+/**
+ * Lê linha bruta da aba Respostas → objeto com nomes de campo.
+ * ÚNICO lugar que conhece COL_RE. Qualquer acesso a colunas de Respostas passa por aqui.
+ */
+function lerLinhaRespostas(row) {
+  const serieRaw = String(row[COL_RE.SERIE] || '').trim();
+  const partes   = serieRaw.split(' | ');
+  return {
+    carimbo:      formatarCarimboGs(row[COL_RE.CARIMBO]),
+    operador:     String(row[COL_RE.OPERADOR]      || '').trim(),
+    tipo:         String(row[COL_RE.TIPO]           || '').trim(),
+    operacao:     String(row[COL_RE.OPERACAO]       || '').trim(),
+    codItem:      String(row[COL_RE.COD_ITEM]       || '').trim(),
+    serieRaw:     serieRaw,
+    nrSerie:      (partes[0] || '').trim(),
+    implemento:   (partes[1] || '').trim(),
+    cliente:      (partes[2] || '').trim(),
+    qtd:          row[COL_RE.QTD],
+    tipoParada:   String(row[COL_RE.TIPO_PARADA]    || '').trim(),
+    tipoRetrab:   String(row[COL_RE.TIPO_RETRAB]    || '').trim(),
+    tipoSetup:    String(row[COL_RE.TIPO_SETUP]     || '').trim(),
+    operacao2:    String(row[COL_RE.OPERACAO2]      || '').trim(),
+    qtdPlanejada: row[COL_RE.QTD_PLANEJADA]         || '',
+    abertoId:     String(row[COL_RE.ABERTO_ID]      || '').trim(),
+  };
+}
+
+/**
+ * Lê linha bruta da aba Abertos → objeto com nomes de campo.
+ * ÚNICO lugar que conhece COL_AB.
+ */
+function lerLinhaAbertos(row) {
+  let loteSeries = null;
+  if (row[COL_AB.LOTE_SERIES]) {
+    try { loteSeries = JSON.parse(String(row[COL_AB.LOTE_SERIES])); } catch(e) {}
+  }
+  return {
+    operador:       String(row[COL_AB.OPERADOR]        || '').trim(),
+    implemento:     String(row[COL_AB.IMPLEMENTO]      || '').trim(),
+    tipo:           String(row[COL_AB.TIPO]            || '').trim(),
+    operacao:       String(row[COL_AB.OPERACAO]        || '').trim(),
+    carimbo:        formatarCarimboGs(row[COL_AB.CARIMBO]),
+    codItem:        String(row[COL_AB.COD_ITEM]        || '').trim(),
+    qtdPlanejada:   row[COL_AB.QTD_PLANEJADA]          || '',
+    nrSerie:        String(row[COL_AB.NR_SERIE]        || '').trim(),
+    implementoNome: String(row[COL_AB.IMPLEMENTO_NOME] || '').trim(),
+    cliente:        String(row[COL_AB.CLIENTE]         || '').trim(),
+    operadorNome:   String(row[COL_AB.OPERADOR_NOME]   || '').trim(),
+    loteSeries:     loteSeries,
+    abertoId:       String(row[COL_AB.ABERTO_ID]       || '').trim(),
+  };
+}
+
 function mesmoOperador(a, b) {
   if (a === null || a === undefined || b === null || b === undefined) return false;
   const sa = String(a).trim();
@@ -1637,6 +1814,19 @@ function reconstruirAbertos() {
   const ehAbertura   = (t) => tiposAberturaSet.has(String(t || '').normalize('NFC'));
   const ehFechamento = (t) => tiposFechamentoSet.has(String(t || '').normalize('NFC'));
 
+  // Bug#fix3: Preservar o código original do operador de Abertos antes de reconstruir.
+  // reconstruirAbertos lê Respostas col B (operadorNome = nome completo) e, para nomes
+  // sem dígito inicial (ex: "ADILSON..."), normalizarCodigoOp devolve o nome em vez do
+  // código, corrompendo Abertos col 0. Solução: ler o mapeamento nome→código de Abertos
+  // antes de sobrescrevê-la.
+  const nomeToCodigoOp = {};
+  const dadosAbAntes = abaAb.getDataRange().getValues();
+  for (let i = 1; i < dadosAbAntes.length; i++) {
+    const codAntes  = String(dadosAbAntes[i][0]  || '').trim();
+    const nomeAntes = String(dadosAbAntes[i][10] || '').trim();
+    if (codAntes && nomeAntes) nomeToCodigoOp[nomeAntes] = codAntes;
+  }
+
   // Map: codigoOperador → dados da última abertura em aberto
   const abertosPorOp = {};
 
@@ -1699,7 +1889,8 @@ function reconstruirAbertos() {
   // Monta linhas novas a serem escritas
   const abertos = Object.values(abertosPorOp);
   const novasLinhas = abertos.map(a => [
-    a.operador,
+    // Bug#fix3: restaurar código original se disponível (evita corromper col 0 com nome longo)
+    nomeToCodigoOp[a.operadorNome] || a.operador,
     a.implemento,
     a.tipo,
     a.operacao,
@@ -3785,38 +3976,32 @@ function analisarInconsistencias() {
   if (dados.length < 2) return { success: false, message: 'Sem dados.' };
 
   // ── PARSE REGISTROS ──────────────────────────────────────────
-  // Colunas: A=ts, B=func, C=tipo, D=op, E=item, F=serie, K=tipoParada, I=tipoRet
+  // Usa lerLinhaRespostas + parseCarimboGsMs para evitar bug MM/DD do V8 do GAS.
+  // Inclui abertoId (col P) para pareamento exato na Fase 1.
   const records = [];
   for (let i = 1; i < dados.length; i++) {
-    const row  = dados[i];
-    const tsRaw = row[0];
-    const func  = String(row[1] || '').trim();
-    const tipo  = String(row[2] || '').trim();
-    const op    = String(row[3] || '').trim();
-    const item  = String(row[4] || '').trim();
-    const serieRaw = String(row[5] || '').trim();
-    const serie = serieRaw.split(' | ')[0].trim();
-
-    if (!func || !tipo) continue;
-
-    let tsMs;
-    if (tsRaw instanceof Date) {
-      tsMs = tsRaw.getTime();
-    } else if (tsRaw) {
-      tsMs = new Date(String(tsRaw)).getTime();
-    }
+    const r = lerLinhaRespostas(dados[i]);
+    if (!r.operador || !r.tipo) continue;
+    const tsMs = parseCarimboGsMs(r.carimbo);
     if (!tsMs || isNaN(tsMs)) continue;
-
-    records.push({ tsMs, func, tipo, op, item, serie });
+    records.push({
+      tsMs,
+      func:     r.operador,
+      tipo:     r.tipo,
+      op:       r.operacao,
+      item:     r.codItem,
+      serie:    r.nrSerie,
+      abertoId: r.abertoId,
+    });
   }
 
-  // Ordena por timestamp (mesmo que o dashboard faz ao iterar)
+  // Ordena por timestamp
   records.sort((a, b) => a.tsMs - b.tsMs);
 
-  // ── WORK MINUTES (replica dashboard: seg-sex 08:00-17:00, pausa 12:00-13:00) ──
+  // ── WORK MINUTES (seg-sex 08:00-17:00, pausa 12:00-13:00) ──
   function workMinutes(tsStart, tsEnd) {
     if (tsEnd <= tsStart) return 0;
-    const WS = 480, WE = 1020, LS = 720, LE = 780; // minutos do dia
+    const WS = 480, WE = 1020, LS = 720, LE = 780;
     function mid(ms) { const d = new Date(ms); return d.getHours()*60 + d.getMinutes(); }
     function wmd(s, e) {
       s = Math.max(s, WS); e = Math.min(e, WE);
@@ -3844,7 +4029,10 @@ function analisarInconsistencias() {
     return Math.max(0, tot);
   }
 
-  // ── PAIR ROWS (replica exata do dashboard) ────────────────────
+  // ── PAIR ROWS ─────────────────────────────────────────────────
+  // Fase 1: par exato por abertoId (se ambos tiverem o mesmo abertoId não-vazio)
+  // Fase 2: fuzzy (mesmo operador + maior score por op/serie/item)
+  // Sem filtro de duração máxima — operações multi-dia são válidas.
   function pairRows(rows, openType, closeType) {
     const pairs = [];
     const opens = [];
@@ -3853,22 +4041,38 @@ function analisarInconsistencias() {
         opens.push({ ...r, _used: false });
       } else if (r.tipo === closeType) {
         let best = null, bestScore = -1;
-        for (let i = 0; i < opens.length; i++) {
-          const o = opens[i];
-          if (o._used || o.func !== r.func || o.tsMs > r.tsMs) continue;
-          let score = 1;
-          if (o.op    === r.op)    score += 4;
-          if (o.serie === r.serie) score += 2;
-          if (o.item  === r.item)  score += 1;
-          if (score > bestScore) { bestScore = score; best = i; }
+
+        // Tolerância de 5 min: resolve lotes onde FECHAMENTO foi gravado segundos antes da ABERTURA
+        const TOLERANCIA_MS = 5 * 60 * 1000;
+
+        // Fase 1 — abertoId exato (se disponível)
+        if (r.abertoId) {
+          for (let i = 0; i < opens.length; i++) {
+            const o = opens[i];
+            if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+            if (o.abertoId && o.abertoId === r.abertoId) { best = i; bestScore = 99; break; }
+          }
         }
+
+        // Fase 2 — fuzzy (fallback se abertoId não casou)
+        if (best === null) {
+          for (let i = 0; i < opens.length; i++) {
+            const o = opens[i];
+            if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+            let score = 1;
+            if (o.op    === r.op)    score += 4;
+            if (o.serie === r.serie) score += 2;
+            if (o.item  === r.item)  score += 1;
+            if (score > bestScore) { bestScore = score; best = i; }
+          }
+        }
+
         if (best !== null) {
           const o = opens[best];
-          const dur = workMinutes(o.tsMs, r.tsMs);
-          if (dur > 0 && dur < 4800) {
-            pairs.push({ func: r.func, op: r.op || o.op, serie: r.serie || o.serie,
-              item: r.item || o.item, dur, openTs: o.tsMs, closeTs: r.tsMs });
-          }
+          // Negativo → 0: lotes onde FECHAMENTO chega segundos antes da ABERTURA (clock drift)
+          const dur = Math.max(0, workMinutes(o.tsMs, r.tsMs));
+          pairs.push({ func: r.func, op: r.op || o.op, serie: r.serie || o.serie,
+            item: r.item || o.item, dur, openTs: o.tsMs, closeTs: r.tsMs });
           opens[best]._used = true;
         }
       }
@@ -3966,8 +4170,441 @@ function analisarOrfaos() {
   return analisarInconsistencias();
 }
 
+// ================================================================
+// EXCLUIR FECHAMENTOS ÓRFÃOS — remove FECHAMENTOs sem ABERTURA par
+// Execute via: ?action=excluirFechamentosOrfaos&key=AGF2026&dryRun=true
+// dryRun=true  → apenas lista o que seria excluído (padrão)
+// dryRun=false → excluí efetivamente (irreversível)
+// ================================================================
+function excluirFechamentosOrfaos(dryRun) {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(ABA_RESPOSTAS);
+  const data  = sheet.getDataRange().getValues();
+
+  // Monta registros com índice de linha real na planilha (1-based)
+  // Filtro idêntico ao analisarInconsistencias: exige operador E tipo preenchidos
+  const records = [];
+  for (let i = 1; i < data.length; i++) {
+    const r = lerLinhaRespostas(data[i]);
+    if (!r.operador || !r.tipo) continue;   // mesmo filtro de analisarInconsistencias
+    const tsMs = parseCarimboGsMs(r.carimbo);
+    if (!tsMs || isNaN(tsMs)) continue;
+    records.push({
+      tipo: r.tipo, func: r.operador, op: r.operacao,
+      serie: r.nrSerie, item: r.codItem, tsMs,
+      abertoId: r.abertoId,
+      rowIndex: i + 1   // linha na planilha (cabeçalho = linha 1)
+    });
+  }
+
+  // Algoritmo de pareamento idêntico ao analisarInconsistencias
+  const TOLERANCIA_MS = 5 * 60 * 1000;
+  const opens = [];
+  const pairs = [];
+
+  records.forEach(r => {
+    if (r.tipo === 'ABERTURA') {
+      opens.push({ ...r, _used: false });
+    } else if (r.tipo === 'FECHAMENTO') {
+      let best = null, bestScore = -1;
+
+      // Fase 1 — abertoId exato
+      if (r.abertoId) {
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+          if (o.abertoId && o.abertoId === r.abertoId) { best = i; bestScore = 99; break; }
+        }
+      }
+      // Fase 2 — fuzzy
+      if (best === null) {
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+          let score = 1;
+          if (o.op    === r.op)    score += 4;
+          if (o.serie === r.serie) score += 2;
+          if (o.item  === r.item)  score += 1;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+      }
+
+      if (best !== null) {
+        opens[best]._used = true;
+        pairs.push({ fechRowIndex: r.rowIndex, aberRowIndex: opens[best].rowIndex });
+      }
+      // Se best === null: FECHAMENTO é órfão — será marcado abaixo
+    }
+  });
+
+  const pairedCloseRows = new Set(pairs.map(p => p.fechRowIndex));
+  const orfaos = records.filter(r =>
+    r.tipo === 'FECHAMENTO' && !pairedCloseRows.has(r.rowIndex)
+  );
+
+  if (dryRun) {
+    return {
+      success: true, dryRun: true,
+      total: orfaos.length,
+      registros: orfaos.map(r => ({
+        row: r.rowIndex,
+        func: r.func, op: r.op,
+        ts: Utilities.formatDate(new Date(r.tsMs), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm')
+      }))
+    };
+  }
+
+  // Execução: apagar de baixo para cima (para não deslocar índices)
+  const rowsDesc = orfaos.map(r => r.rowIndex).sort((a, b) => b - a);
+  rowsDesc.forEach(row => sheet.deleteRow(row));
+
+  return {
+    success: true, dryRun: false,
+    linhasExcluidas: rowsDesc.length,
+    mensagem: rowsDesc.length + ' FECHAMENTOs órfãos excluídos.'
+  };
+}
+
+// ================================================================
+// EXCLUIR ABERTURAS ÓRFÃS — remove ABERTURAs sem FECHAMENTO par
+// Execute via: ?action=excluirAberturasOrfas&key=AGF2026&dryRun=true
+// dryRun=true  → apenas lista (padrão)
+// dryRun=false → exclui efetivamente (irreversível)
+// ================================================================
+function excluirAberturasOrfas(dryRun) {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(ABA_RESPOSTAS);
+  const data  = sheet.getDataRange().getValues();
+
+  const records = [];
+  for (let i = 1; i < data.length; i++) {
+    const r = lerLinhaRespostas(data[i]);
+    if (!r.operador || !r.tipo) continue;
+    const tsMs = parseCarimboGsMs(r.carimbo);
+    if (!tsMs || isNaN(tsMs)) continue;
+    records.push({
+      tipo: r.tipo, func: r.operador, op: r.operacao,
+      serie: r.nrSerie, item: r.codItem, tsMs,
+      abertoId: r.abertoId,
+      rowIndex: i + 1
+    });
+  }
+
+  const TOLERANCIA_MS = 5 * 60 * 1000;
+  const opens = [];
+  const pairedOpenRows = new Set();
+
+  records.forEach(r => {
+    if (r.tipo === 'ABERTURA') {
+      opens.push({ ...r, _used: false });
+    } else if (r.tipo === 'FECHAMENTO') {
+      let best = null, bestScore = -1;
+
+      if (r.abertoId) {
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+          if (o.abertoId && o.abertoId === r.abertoId) { best = i; bestScore = 99; break; }
+        }
+      }
+      if (best === null) {
+        for (let i = 0; i < opens.length; i++) {
+          const o = opens[i];
+          if (o._used || o.func !== r.func || o.tsMs > r.tsMs + TOLERANCIA_MS) continue;
+          let score = 1;
+          if (o.op    === r.op)    score += 4;
+          if (o.serie === r.serie) score += 2;
+          if (o.item  === r.item)  score += 1;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+      }
+
+      if (best !== null) {
+        opens[best]._used = true;
+        pairedOpenRows.add(opens[best].rowIndex);
+      }
+    }
+  });
+
+  const orfaos = records.filter(r =>
+    r.tipo === 'ABERTURA' && !pairedOpenRows.has(r.rowIndex)
+  );
+
+  if (dryRun) {
+    return {
+      success: true, dryRun: true,
+      total: orfaos.length,
+      registros: orfaos.map(r => ({
+        row: r.rowIndex,
+        func: r.func, op: r.op,
+        ts: Utilities.formatDate(new Date(r.tsMs), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm')
+      }))
+    };
+  }
+
+  const rowsDesc = orfaos.map(r => r.rowIndex).sort((a, b) => b - a);
+  rowsDesc.forEach(row => sheet.deleteRow(row));
+
+  return {
+    success: true, dryRun: false,
+    linhasExcluidas: rowsDesc.length,
+    mensagem: rowsDesc.length + ' ABERTURAs órfãs excluídas.'
+  };
+}
+
+// ================================================================
+// SMOKE TEST — verifica integridade das funções críticas após deploy
+// Execute via: ?action=smokeTest&key=AGF2026
+// Retorna { success, erros[], timestamp } — erros vazio = tudo OK
+// ================================================================
+function smokeTest() {
+  const erros = [];
+
+  // ── 1. formatarCarimboGs: testa os 4 formatos de entrada ──
+  const casosFmt = [
+    { entrada: new Date('2026-06-10T18:00:00Z'), esperado: /^\d{2}\/\d{2}\/2026\s\d{2}:\d{2}:\d{2}$/ },
+    { entrada: '10/06/2026 15:52:02',            esperado: /^10\/06\/2026/ },
+    { entrada: '2026-06-10T18:52:00.000Z',       esperado: /^10\/06\/2026/ },
+    { entrada: 'Tue Jun 10 2026 15:55:28 GMT-0300 (Brasilia Standard Time)',
+                                                 esperado: /^10\/06\/2026/ },
+  ];
+  casosFmt.forEach(c => {
+    const r = formatarCarimboGs(c.entrada);
+    if (!c.esperado.test(r))
+      erros.push('formatarCarimboGs falhou: entrada="' + c.entrada + '" → "' + r + '"');
+  });
+
+  // ── 2. parseCarimboGsMs: converte dd/MM/yyyy sem bug MM/DD ──
+  const ms1 = parseCarimboGsMs('09/06/2026 15:52:00');
+  const d1  = new Date(ms1);
+  if (d1.getDate() !== 9 || d1.getMonth() !== 5)   // junho = mês 5 (0-indexed)
+    erros.push('parseCarimboGsMs: 09/06 interpretado como mês 9 (bug MM/DD) — d=' + d1.getDate() + ' m=' + (d1.getMonth()+1));
+
+  const ms2 = parseCarimboGsMs('01/06/2026 08:00:00');
+  const d2  = new Date(ms2);
+  if (d2.getDate() !== 1 || d2.getMonth() !== 5)
+    erros.push('parseCarimboGsMs: 01/06 falhou — d=' + d2.getDate() + ' m=' + (d2.getMonth()+1));
+
+  // ── 3. mesmoOperador: normaliza zeros à esquerda ──
+  if (!mesmoOperador('000130', '130'))  erros.push('mesmoOperador: 000130 ≠ 130 (deve ser igual)');
+  if (!mesmoOperador('130', '130'))     erros.push('mesmoOperador: 130 ≠ 130');
+  if ( mesmoOperador('130', '131'))     erros.push('mesmoOperador: 130 = 131 (falso positivo)');
+  if ( mesmoOperador('', '130'))        erros.push('mesmoOperador: "" = 130 (falso positivo)');
+
+  // ── 4. lerLinhaRespostas: mapeamento de campos ──
+  const linhaFake = new Array(16).fill('');
+  linhaFake[COL_RE.OPERADOR]    = '130';
+  linhaFake[COL_RE.TIPO]        = 'ABERTURA';
+  linhaFake[COL_RE.OPERACAO]    = '0040';
+  linhaFake[COL_RE.COD_ITEM]    = 'ITEM01';
+  linhaFake[COL_RE.SERIE]       = '1001 | IMPLEMENTO_X | CLIENTE_Y';
+  linhaFake[COL_RE.QTD_PLANEJADA] = 5;
+  linhaFake[COL_RE.ABERTO_ID]   = 'AP-ABCD1234EF';
+  const lLRe = lerLinhaRespostas(linhaFake);
+  if (lLRe.operador    !== '130')          erros.push('lerLinhaRespostas: operador errado → ' + lLRe.operador);
+  if (lLRe.tipo        !== 'ABERTURA')     erros.push('lerLinhaRespostas: tipo errado → ' + lLRe.tipo);
+  if (lLRe.nrSerie     !== '1001')         erros.push('lerLinhaRespostas: nrSerie errado → ' + lLRe.nrSerie);
+  if (lLRe.implemento  !== 'IMPLEMENTO_X') erros.push('lerLinhaRespostas: implemento errado → ' + lLRe.implemento);
+  if (lLRe.abertoId    !== 'AP-ABCD1234EF') erros.push('lerLinhaRespostas: abertoId errado → ' + lLRe.abertoId);
+  if (lLRe.qtdPlanejada !== 5)             erros.push('lerLinhaRespostas: qtdPlanejada errado → ' + lLRe.qtdPlanejada);
+
+  // ── 5. lerLinhaAbertos: mapeamento de campos ──
+  const linhaAb = new Array(13).fill('');
+  linhaAb[COL_AB.OPERADOR]    = '130';
+  linhaAb[COL_AB.ABERTO_ID]  = 'AP-TEST000001';
+  linhaAb[COL_AB.CLIENTE]    = 'CLIENTE_Z';
+  const lLAb = lerLinhaAbertos(linhaAb);
+  if (lLAb.operador  !== '130')          erros.push('lerLinhaAbertos: operador errado → ' + lLAb.operador);
+  if (lLAb.abertoId  !== 'AP-TEST000001') erros.push('lerLinhaAbertos: abertoId errado → ' + lLAb.abertoId);
+  if (lLAb.cliente   !== 'CLIENTE_Z')    erros.push('lerLinhaAbertos: cliente errado → ' + lLAb.cliente);
+
+  return {
+    success: erros.length === 0,
+    erros:   erros,
+    timestamp: Utilities.formatDate(new Date(), 'America/Sao_Paulo', 'dd/MM/yyyy HH:mm:ss'),
+    versao: 'v4.3.7',
+  };
+}
+
 function marcarOrfaosLegado(cutoff) {
   return { success: false, message: 'Função não implementada. Use analisarInconsistencias.' };
+}
+
+// ================================================================
+// FORCE MATCH ÓRFÃOS
+// 1. Roda o algoritmo completo de pareamento (Phase1 abertoId + Phase2 fuzzy)
+//    para identificar os registros que REALMENTE não foram pareados.
+// 2. Tenta casar os órfãos com critério relaxado:
+//    mesmo operador + mesma operação + ts_FECHAMENTO >= ts_ABERTURA - 5min
+//    (ignora série — resolve lotes de março/2026)
+// 3. Para pares encontrados: escreve o abertoId da ABERTURA em col P do FECHAMENTO.
+//    Se a ABERTURA também não tiver abertoId, gera um novo para ambos.
+// 4. Para órfãos sem par: exclui da planilha.
+//
+// Execute via: ?action=forceMatchOrfaos&key=AGF2026&dryRun=true   (simulação)
+//              ?action=forceMatchOrfaos&key=AGF2026               (executa)
+// Parâmetro: cutoff=2026-06-08 (só processa registros ANTES desta data)
+// ================================================================
+function forceMatchOrfaos(dryRun, cutoffDateStr) {
+  dryRun = (dryRun === true || dryRun === 'true');
+  cutoffDateStr = cutoffDateStr || '2026-06-08';
+  const cutoffMs = new Date(cutoffDateStr + 'T00:00:00').getTime();
+
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) return { success: false, message: 'Aba Respostas não encontrada.' };
+
+  const dados = aba.getDataRange().getValues();
+
+  // ── PASSO 1: lê TODOS os registros com índice de linha ─────────
+  const allRecs = [];
+  for (let i = 1; i < dados.length; i++) {
+    const r = lerLinhaRespostas(dados[i]);
+    if (!r.operador || !r.tipo) continue;
+    const tsMs = parseCarimboGsMs(r.carimbo);
+    if (!tsMs || isNaN(tsMs)) continue;
+    if (tsMs >= cutoffMs) continue;  // só antes do cutoff
+    allRecs.push({
+      rowIndex: i + 1, tsMs,
+      operador: r.operador, tipo: r.tipo, operacao: r.operacao,
+      serie: r.nrSerie, codItem: r.codItem, carimbo: r.carimbo,
+      abertoId: r.abertoId, _used: false,
+    });
+  }
+  allRecs.sort((a, b) => a.tsMs - b.tsMs);
+
+  // ── PASSO 2: algoritmo normal (Phase1+Phase2) — marca os pareados ─
+  const aberturas  = allRecs.filter(r => r.tipo === 'ABERTURA');
+  const fechamentos = allRecs.filter(r => r.tipo === 'FECHAMENTO');
+
+  fechamentos.forEach(c => {
+    let best = null, bestScore = -1;
+    // Phase 1 — abertoId exato
+    if (c.abertoId) {
+      for (let i = 0; i < aberturas.length; i++) {
+        const o = aberturas[i];
+        if (o._used || !mesmoOperador(o.operador, c.operador)) continue;
+        if (o.tsMs > c.tsMs + 5*60000) continue;
+        if (o.abertoId && o.abertoId === c.abertoId) { best = i; bestScore = 99; break; }
+      }
+    }
+    // Phase 2 — fuzzy
+    if (best === null) {
+      for (let i = 0; i < aberturas.length; i++) {
+        const o = aberturas[i];
+        if (o._used || !mesmoOperador(o.operador, c.operador)) continue;
+        if (o.tsMs > c.tsMs + 5*60000) continue;
+        let score = 1;
+        if (o.operacao === c.operacao) score += 4;
+        if (o.serie    === c.serie)    score += 2;
+        if (o.codItem  === c.codItem)  score += 1;
+        if (score > bestScore) { bestScore = score; best = i; }
+      }
+    }
+    if (best !== null) {
+      aberturas[best]._used = true;
+      c._used = true;
+    }
+  });
+
+  // ── PASSO 3: identifica órfãos reais ──────────────────────────
+  const orphanAb  = aberturas.filter(r => !r._used);   // ABERTURAs não pareadas
+  const orphanFe  = fechamentos.filter(r => !r._used); // FECHAMENTOs não pareados
+
+  // Reset para o force-match
+  orphanAb.forEach(r => r._used = false);
+  orphanFe.forEach(r => r._used = false);
+
+  // ── PASSO 4: force-match com critério relaxado ──────────────────
+  // Mesmo operador + mesma operação + FECHAMENTO >= ABERTURA - 5min
+  // Desempate: menor diferença de tempo
+  const pares = [];
+
+  orphanFe.forEach(c => {
+    let bestIdx = -1, bestDelta = Infinity;
+
+    for (let i = 0; i < orphanAb.length; i++) {
+      const o = orphanAb[i];
+      if (o._used) continue;
+      if (!mesmoOperador(o.operador, c.operador)) continue;
+      if (o.operacao !== c.operacao) continue;        // mesma operação obrigatória
+      if (o.tsMs > c.tsMs + 5 * 60000) continue;     // ABERTURA não pode ser muito depois do FECHAMENTO
+
+      const delta = Math.abs(c.tsMs - o.tsMs);
+      if (delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+    }
+
+    if (bestIdx >= 0) {
+      const o = orphanAb[bestIdx];
+      o._used = true;
+      c._used = true;
+      // Usa abertoId da ABERTURA; se não tiver, gera novo para ambos
+      const idFinal = o.abertoId || gerarIdApontamento();
+      pares.push({
+        idFinal,
+        openRow:   o.rowIndex,
+        closeRow:  c.rowIndex,
+        openHasId: !!o.abertoId,
+        operador:  o.operador,
+        operacao:  o.operacao,
+        serieAb:   o.serie,
+        serieFe:   c.serie,
+        tsAb:      o.carimbo,
+        tsFe:      c.carimbo,
+        deltaMin:  Math.round((c.tsMs - o.tsMs) / 60000),
+      });
+    }
+  });
+
+  // ── PASSO 5: registros sem par algum → excluir ─────────────────
+  const semParAb = orphanAb.filter(r => !r._used);
+  const semParFe = orphanFe.filter(r => !r._used);
+  const linhasExcluir = semParAb.map(r => r.rowIndex)
+    .concat(semParFe.map(r => r.rowIndex))
+    .sort((a, b) => b - a); // decrescente para não deslocar índices
+
+  const log = {
+    success:       true,
+    dryRun,
+    cutoff:        cutoffDateStr,
+    totalAntes:    { aberturas: aberturas.length, fechamentos: fechamentos.length },
+    orfaosEncontrados: { aberturas: orphanAb.length, fechamentos: orphanFe.length },
+    forcePareados: pares.length,
+    semParExcluir: { aberturas: semParAb.length, fechamentos: semParFe.length },
+    linhasExcluidas: linhasExcluir.length,
+    exemplosPares: pares.slice(0, 20).map(p => ({
+      operador: p.operador, operacao: p.operacao,
+      tsAb: p.tsAb, serieAb: p.serieAb,
+      tsFe: p.tsFe, serieFe: p.serieFe,
+      delta: p.deltaMin + 'min',
+    })),
+    exemplosExcluidos: semParAb.slice(0, 10).map(r => ({
+      row: r.rowIndex, operador: r.operador, operacao: r.operacao,
+      serie: r.serie, ts: r.carimbo,
+    })),
+  };
+
+  if (dryRun) return log;
+
+  // ── EXECUÇÃO ──────────────────────────────────────────────────
+  // 1. Escreve o id no FECHAMENTO (e na ABERTURA se estava sem id)
+  pares.forEach(p => {
+    aba.getRange(p.closeRow, COL_RE.ABERTO_ID + 1).setValue(p.idFinal);
+    if (!p.openHasId) {
+      aba.getRange(p.openRow, COL_RE.ABERTO_ID + 1).setValue(p.idFinal);
+    }
+  });
+
+  // 2. Exclui linhas sem par (decrescente para não deslocar índices)
+  linhasExcluir.forEach(row => {
+    try { aba.deleteRow(row); } catch(e) {}
+  });
+
+  // 3. Reconstrói Abertos
+  try { reconstruirAbertos(); } catch(e) {}
+
+  log.mensagem = pares.length + ' pares casados via force-match, ' + linhasExcluir.length + ' linhas sem par excluídas.';
+  return log;
 }
 
 // ================================================================
