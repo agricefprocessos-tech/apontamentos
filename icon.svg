@@ -1,18 +1,53 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Fundo arredondado -->
-  <rect width="512" height="512" rx="96" fill="#0f0f1a"/>
-
-  <!-- Letra A centralizada -->
-  <text x="256" y="330" font-family="system-ui, Arial Black, sans-serif" font-size="320" font-weight="900"
-    text-anchor="middle" fill="#2ecc71" letter-spacing="-8">A</text>
-
-  <!-- Folha/planta no topo do A -->
-  <g transform="translate(310, 88)">
-    <!-- Caule -->
-    <line x1="0" y1="40" x2="0" y2="0" stroke="#2ecc71" stroke-width="6" stroke-linecap="round"/>
-    <!-- Folha esquerda -->
-    <ellipse cx="-11" cy="20" rx="11" ry="6" fill="#2ecc71" transform="rotate(-35 -11 20)"/>
-    <!-- Folha direita -->
-    <ellipse cx="11" cy="14" rx="11" ry="6" fill="#2ecc71" transform="rotate(35 11 14)"/>
+  <rect width="512" height="512" fill="#0d1117"/>
+  <g transform="translate(256,256)">
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(0)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(22.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(45)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(67.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(90)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(112.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(135)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(157.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(180)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(202.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(225)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(247.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(270)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(292.5)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(315)"/>
+    <rect x="-14" y="-154" width="28" height="44" rx="6" fill="#d97706" transform="rotate(337.5)"/>
+    <circle r="118" fill="#f59e0b"/>
+    <circle r="114" fill="#1c2435"/>
+    <circle r="114" fill="none" stroke="#f59e0b" stroke-width="5" opacity="0.6"/>
+    <line x1="-96" y1="-20" x2="96" y2="-20" stroke="#ffffff" stroke-width="1" opacity="0.06"/>
+    <line x1="-96" y1="0"   x2="96" y2="0"   stroke="#ffffff" stroke-width="1" opacity="0.06"/>
+    <line x1="-96" y1="20"  x2="96" y2="20"  stroke="#ffffff" stroke-width="1" opacity="0.06"/>
+    <line x1="-96" y1="40"  x2="96" y2="40"  stroke="#ffffff" stroke-width="1" opacity="0.06"/>
+    <rect x="-76" y="-12" width="24" height="52" rx="5" fill="#1e40af" opacity="0.9"/>
+    <rect x="-76" y="-12" width="24" height="14" rx="5" fill="#3b82f6"/>
+    <rect x="-42" y="-34" width="24" height="74" rx="5" fill="#1e40af" opacity="0.9"/>
+    <rect x="-42" y="-34" width="24" height="14" rx="5" fill="#3b82f6"/>
+    <rect x="-8"  y="-22" width="24" height="62" rx="5" fill="#1e40af" opacity="0.9"/>
+    <rect x="-8"  y="-22" width="24" height="14" rx="5" fill="#3b82f6"/>
+    <rect x="26"  y="-56" width="24" height="96" rx="5" fill="#1d4ed8" opacity="0.95"/>
+    <rect x="26"  y="-56" width="24" height="14" rx="5" fill="#60a5fa"/>
+    <rect x="60"  y="-40" width="24" height="80" rx="5" fill="#1e40af" opacity="0.9"/>
+    <rect x="60"  y="-40" width="24" height="14" rx="5" fill="#3b82f6"/>
+    <line x1="-84" y1="40" x2="92" y2="40" stroke="#ffffff" stroke-width="2.5" opacity="0.2" stroke-linecap="round"/>
+    <path d="M-64,-12 C-50,-25 -35,-42 -30,-34 C-20,-24 -15,-28 4,-22 C15,-18 22,-62 38,-56 C50,-52 55,-48 72,-40"
+      fill="none" stroke="#22d3ee" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.25"/>
+    <path d="M-64,-12 C-50,-25 -35,-42 -30,-34 C-20,-24 -15,-28 4,-22 C15,-18 22,-62 38,-56 C50,-52 55,-48 72,-40"
+      fill="none" stroke="#22d3ee" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="-64" cy="-12" r="5" fill="#22d3ee"/>
+    <circle cx="-30" cy="-34" r="5" fill="#22d3ee"/>
+    <circle cx="4"   cy="-22" r="5" fill="#22d3ee"/>
+    <circle cx="38"  cy="-56" r="7" fill="#22d3ee"/>
+    <circle cx="72"  cy="-40" r="5" fill="#22d3ee"/>
+    <circle cx="38"  cy="-56" r="20" fill="#22d3ee" opacity="0.12"/>
+    <circle cx="38"  cy="-56" r="12" fill="#22d3ee" opacity="0.18"/>
+    <circle r="14" fill="#0d1117"/>
+    <circle r="8"  fill="#f59e0b"/>
+    <circle r="4"  fill="#0d1117"/>
   </g>
 </svg>
