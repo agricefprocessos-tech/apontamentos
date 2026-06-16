@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Fundo arredondado -->
+  <rect width="512" height="512" rx="96" fill="#0f0f1a"/>
+
+  <!-- Letra A centralizada -->
+  <text x="256" y="330" font-family="system-ui, Arial Black, sans-serif" font-size="320" font-weight="900"
+    text-anchor="middle" fill="#2ecc71" letter-spacing="-8">A</text>
+
+  <!-- Folha/planta no topo do A -->
+  <g transform="translate(310, 88)">
+    <!-- Caule -->
+    <line x1="0" y1="40" x2="0" y2="0" stroke="#2ecc71" stroke-width="6" stroke-linecap="round"/>
+    <!-- Folha esquerda -->
+    <ellipse cx="-11" cy="20" rx="11" ry="6" fill="#2ecc71" transform="rotate(-35 -11 20)"/>
+    <!-- Folha direita -->
+    <ellipse cx="11" cy="14" rx="11" ry="6" fill="#2ecc71" transform="rotate(35 11 14)"/>
+  </g>
+</svg>
