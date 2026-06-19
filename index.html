@@ -711,6 +711,12 @@ async function verificarAbertoSeCompleto() {
   // Verifica assim que operador for selecionado (independe da série)
   if (!opSel.value) return;
 
+  // Aguarda qualquer sincronização de fila offline em andamento antes de consultar o servidor.
+  // Sem isso, um fechamento que falhou só no cliente (mas foi aplicado no servidor) pode ainda
+  // não ter sido confirmado pela fila — e essa consulta leria o estado antigo, forçando o
+  // operador a fechar o mesmo apontamento de novo.
+  if (_filaSincPromise) { try { await _filaSincPromise; } catch(e) {} }
+
   // Cancela requisição anterior se ainda estiver em andamento
   if (_verificarAbortCtrl) { _verificarAbortCtrl.abort(); }
   _verificarAbortCtrl = new AbortController();
@@ -1308,12 +1314,22 @@ function atualizarBadgeFila(){
 }
 
 let _sincronizando = false;
-async function sincronizarFila(manual=false){
-  if(_sincronizando) return;
+// Promise da sincronização em andamento — permite que outras rotinas (ex.: verificarAbertoSeCompleto)
+// aguardem a fila offline ser esvaziada antes de consultar o estado "aberto" no servidor.
+// Sem isso, uma consulta concorrente pode ler um estado desatualizado (fechamento ainda não sincronizado)
+// e forçar o operador a fechar o mesmo apontamento de novo.
+let _filaSincPromise = null;
+const TIPOS_FECHAMENTO_FILA = ['FECHAMENTO','TERMINO_RETRABALHO','TERMINO_PARADA'];
+function sincronizarFila(manual=false){
+  if(_sincronizando) return _filaSincPromise;
   _sincronizando = true;
-  try {
-    const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-    if(!fila.length){ atualizarBadgeFila(); return; }
+  _filaSincPromise = _sincronizarFilaImpl(manual).finally(() => { _sincronizando = false; });
+  return _filaSincPromise;
+}
+async function _sincronizarFilaImpl(manual){
+  const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
+  if(!fila.length){ atualizarBadgeFila(); return; }
+  {
     const nova=[];
     let sincronizados = 0;
     for(const item of fila){
@@ -1335,6 +1351,12 @@ async function sincronizarFila(manual=false){
         const d=await postAPI(itemSemMeta);
         if(d.success){
           sincronizados++;
+        } else if (d.semAberto && TIPOS_FECHAMENTO_FILA.includes(item.tipoApontamento)) {
+          // Servidor não encontrou abertura correspondente — esse fechamento já foi aplicado
+          // numa tentativa anterior (a confirmação que não chegou ao cliente). Não é uma falha:
+          // descarta da fila silenciosamente para não esgotar tentativas e alarmar o suporte.
+          console.log('AGRICEF: fechamento já aplicado anteriormente, removendo da fila', item);
+          sincronizados++;
         } else {
           nova.push({...item, _tentativas: tentativas});
         }
@@ -1346,8 +1368,6 @@ async function sincronizarFila(manual=false){
     atualizarBadgeFila();
     if(sincronizados > 0) showToast(sincronizados+' apontamento(s) sincronizado(s) com sucesso ✓','success');
     else if(manual && nova.length > 0) showToast('Servidor indisponível — apontamentos mantidos na fila','error');
-  } finally {
-    _sincronizando = false;
   }
 }
 
