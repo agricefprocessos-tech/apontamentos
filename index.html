@@ -1176,6 +1176,10 @@ async function enviarApontamento() {
   const btn=document.getElementById('btnEnviar');
   btn.disabled=true; btn.textContent='Registrando...';
   setLoading(true);
+  // Sem isso, o operador só vê "Registrando..." parado — se o servidor estiver
+  // processando uma fila de outras requisições (mesmo lock para todo apontamento),
+  // pode levar até ~20s. Avisa que ainda está em andamento em vez de parecer travado.
+  const avisoDemoraEnvio = setTimeout(() => { btn.textContent = 'Ainda registrando... (até 20s)'; }, 5000);
 
   const ts   = carimboBrowser();
   const hora = pad(new Date().getHours())+':'+pad(new Date().getMinutes());
@@ -1275,7 +1279,7 @@ async function enviarApontamento() {
     // Toast claro para o operador
     setTimeout(() => showToast('⚠ Servidor ocupado — apontamento salvo e será reenviado automaticamente em instantes','error',8000), 400);
     return;
-  } finally { setLoading(false); }
+  } finally { setLoading(false); clearTimeout(avisoDemoraEnvio); }
 }
 
 function validarFormulario() {

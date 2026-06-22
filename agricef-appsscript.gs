@@ -256,6 +256,17 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'removerPorCarimboECodItem' && e.parameter.key === 'AGF2026') {
+    try {
+      const carimbo = e.parameter.carimbo || '';
+      const codItem = e.parameter.codItem || '';
+      if (!carimbo || !codItem) return jsonResponse({ success: false, message: 'Parâmetros carimbo e codItem obrigatórios.' });
+      const resultado = removerRegistroPorCarimboECodItem(carimbo, codItem);
+      return jsonResponse({ success: true, ...resultado });
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'diagRespostas' && e.parameter.key === 'AGF2026') {
     try {
       const ss2 = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -344,6 +355,9 @@ function doGet(e) {
       // Endpoint dedicado: deletar FECHAMENTOs sem ABERTURA (aceita apenas tipo FECHAMENTO)
       if (payload.action === 'deletarFechamentosOrfaos' && payload.key === 'AGF2026') {
         return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, ['FECHAMENTO']));
+      }
+      if (payload.action === 'editarApontamento') {
+        return editarApontamento(payload);
       }
       return gravarApontamento(payload);
     } catch (err) {
@@ -583,10 +597,12 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
 // ================================================================
 
 function gravarApontamento(payload) {
-  // LockService garante que duas requisições simultâneas não passem juntas pela validação
+  // LockService garante que duas requisições simultâneas não passem juntas pela validação.
+  // Perf: 20s (era 15s) — testes de carga mostraram 6 operações concorrentes levando até
+  // ~11.5s para a última da fila; o timeout maior dá margem antes de rejeitar com "ocupado".
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(15000);
+    lock.waitLock(20000);
   } catch (lockErr) {
     return jsonResponse({ success: false, message: 'Servidor ocupado. Tente novamente em instantes.' });
   }
@@ -616,8 +632,11 @@ function gravarApontamento(payload) {
     // ---------------------------------------------------------------
     const _tiposAb = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
 
-    // Bug#22 fix: nrSerie obrigatório para tipos de abertura
-    if (_tiposAb.includes(tipo) && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
+    // Lote: a série fica em loteSeries (várias), não no campo nrSerie — não exigir nrSerie nesse caso
+    const _ehLote = payload.isLote === true || (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0);
+
+    // Bug#22 fix: nrSerie obrigatório para tipos de abertura (exceto lote, validado mais abaixo)
+    if (_tiposAb.includes(tipo) && !_ehLote && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
       return jsonResponse({ success: false, message: 'Campo nrSerie é obrigatório para ' + tipo + '.' });
     }
     // Bug#28 fix: nrSerie não pode conter "|" (separador do campo F da planilha)
@@ -642,6 +661,11 @@ function gravarApontamento(payload) {
 
     // Lê Abertos UMA VEZ — reaproveitado em validação, loteSeriesFechamento e atualizarAbertos
     const dadosAbertos = abaAb.getDataRange().getValues();
+
+    // Fechamento parcial de lote: guarda o array original de séries (com qtdPlanejada já fixada
+    // na abertura) do registro que está sendo fechado. Preenchido na validação abaixo e
+    // reaproveitado tanto na gravação por série quanto no saldo parcial.
+    let loteSeriesFechamento = null;
 
     // ---------------------------------------------------------------
     // VALIDAÇÃO SERVER-SIDE — executada ANTES de qualquer escrita,
@@ -692,6 +716,12 @@ function gravarApontamento(payload) {
           // O abertoId ainda é incluído para que o frontend possa recuperar um phantom sem double-gravar.
           const mesmoTipo  = tipoExistente === (TIPOS_APONTAMENTO[tipo] || tipo);
           const mesmaSerie = serieExistente === String(payload.nrSerie || '').trim();
+          // Lote: inclui loteSeries na resposta de bloqueio para que o frontend monte o grid de
+          // fechamento parcial mesmo quando o bloqueio vem do fluxo de ABERTURA (não de verificarAberto).
+          let loteSeriesExistente = null;
+          if (dadosAbertos[i][11]) {
+            try { loteSeriesExistente = JSON.parse(String(dadosAbertos[i][11])); } catch(e) {}
+          }
           if (mesmoTipo && mesmaSerie && abertoIdExistente) {
             return jsonResponse({
               success: false,
@@ -708,6 +738,7 @@ function gravarApontamento(payload) {
                 nrSerie:      serieExistente,
                 implemento:   dadosAbertos[i][8] || '',
                 cliente:      dadosAbertos[i][9] || '',
+                loteSeries:   loteSeriesExistente,
               },
             });
           }
@@ -726,6 +757,7 @@ function gravarApontamento(payload) {
               nrSerie:      serieExistente,
               implemento:   dadosAbertos[i][8] || '',
               cliente:      dadosAbertos[i][9] || '',
+              loteSeries:   loteSeriesExistente,
             }
           });
         }
@@ -773,11 +805,45 @@ function gravarApontamento(payload) {
           // Valida série apenas para FECHAMENTO (TERMINO_PARADA/RETRABALHO não têm série)
           if (tipo === 'FECHAMENTO') {
             const serieAberto      = String(dadosAbertos[i][7]  || '').trim();
-            const loteAberto       = String(dadosAbertos[i][11] || '').trim();
+            const loteAbertoRaw    = String(dadosAbertos[i][11] || '').trim();
             const serieFechamento  = String(payload.nrSerie || '').trim();
             const loteFechamento   = payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
-            // Só valida quando a abertura tem série definida e não é lote
-            if (serieAberto && !loteAberto && !loteFechamento) {
+
+            if (loteAbertoRaw) {
+              // Abertura foi em lote — fechamento precisa informar quais séries está fechando
+              // agora (permite fechamento parcial: algumas séries podem continuar abertas).
+              let seriesOriginais = [];
+              try { seriesOriginais = JSON.parse(loteAbertoRaw); } catch(e) {}
+              if (!loteFechamento) {
+                return jsonResponse({
+                  success: false,
+                  message: 'Este apontamento foi aberto em lote — selecione quais séries está fechando.',
+                  loteFechamentoObrigatorio: true,
+                  seriesDisponiveis: seriesOriginais,
+                });
+              }
+              // Bug fix: toda série do fechamento precisa pertencer ao lote original —
+              // sem isso, seria possível "fechar" séries que nunca foram abertas.
+              const nrSeriesOriginais  = new Set(seriesOriginais.map(s => String(s.nrSerie).trim()));
+              const nrSeriesFechamento = payload.loteSeries.map(s => String(s.nrSerie).trim());
+              const seriesForaDoLote = nrSeriesFechamento.filter(s => !nrSeriesOriginais.has(s));
+              if (seriesForaDoLote.length > 0) {
+                return jsonResponse({
+                  success: false,
+                  message: 'Série(s) não pertencem ao lote aberto: ' + seriesForaDoLote.join(', '),
+                  serieIncompativel: true,
+                });
+              }
+              loteSeriesFechamento = seriesOriginais; // reaproveitado na gravação por série e no saldo parcial
+            } else if (loteFechamento) {
+              // Defensivo: payload trouxe loteSeries mas a abertura NÃO foi feita em lote
+              return jsonResponse({
+                success: false,
+                message: 'Este apontamento não foi aberto em lote — não é possível fechar com seleção de séries.',
+                serieIncompativel: true,
+              });
+            } else if (serieAberto) {
+              // Comportamento original: série única — precisa bater com a abertura
               if (serieFechamento && serieFechamento !== serieAberto) {
                 return jsonResponse({
                   success: false,
@@ -923,38 +989,72 @@ function gravarApontamento(payload) {
         }
       }
 
-      // Bug#4 fix: quantidade total ÷ número de séries (distribuição proporcional)
+      // Bug#4 fix (revisado): distribuição proporcional sem sobra — soma exata ao total,
+      // em vez de Math.ceil em cada série (que inflava o total quando não dividia exato).
       const numSeries = payload.loteSeries.length;
-      const qtdPlTotal  = Number(payload.qtdPlanejada || 0);
       const qtdReTotal  = (qtd === '' ? 0 : Number(qtd));
-      const qtdPlPorSerie = numSeries > 0 ? Math.ceil(qtdPlTotal / numSeries) : qtdPlTotal;
-      const qtdRePorSerie = numSeries > 0 ? Math.ceil(qtdReTotal / numSeries) : qtdReTotal;
+      const distribuirQtd = (total, n) => {
+        if (n <= 0) return [];
+        const base  = Math.floor(total / n);
+        const resto = total - base * n;
+        return Array.from({ length: n }, (_, i) => base + (i < resto ? 1 : 0));
+      };
+      // Quantidade realizada: sempre dividida entre as séries sendo gravadas AGORA
+      // (no fechamento parcial, é só entre as séries fechadas nesta chamada).
+      const qtdRePorSerieArr = distribuirQtd(qtdReTotal, numSeries);
+
+      // Quantidade planejada por série:
+      // • ABERTURA — divide o total do lote agora e FIXA esse valor por série (persistido
+      //   em payload.loteSeries, que atualizarAbertos grava na aba Abertos). A partir daqui
+      //   esse valor não muda mais, mesmo que o lote seja fechado em partes depois.
+      // • FECHAMENTO — nunca recalcula a partir de payload.qtdPlanejada: usa o valor que já
+      //   foi fixado na abertura (loteSeriesFechamento), olhando pela série. Sem isso, um
+      //   fechamento parcial distorceria o planejado das séries que ainda ficam abertas.
+      let qtdPlPorSerieArr;
+      if (tiposAbertura.includes(tipo)) {
+        const qtdPlTotal = Number(payload.qtdPlanejada || 0);
+        qtdPlPorSerieArr = distribuirQtd(qtdPlTotal, numSeries);
+        payload.loteSeries = payload.loteSeries.map((item, idx) => ({ ...item, qtdPlanejada: qtdPlPorSerieArr[idx] }));
+      } else {
+        qtdPlPorSerieArr = payload.loteSeries.map(item => {
+          const original = (loteSeriesFechamento || []).find(s => String(s.nrSerie).trim() === String(item.nrSerie).trim());
+          return original && original.qtdPlanejada != null ? Number(original.qtdPlanejada) : 0;
+        });
+      }
 
       // Batch write — uma única chamada de API para todas as séries do lote
-      const rows = payload.loteSeries.map(item => {
+      // Nota: linha[15] (abertoId/elo de pareamento) já vem correto do cálculo acima
+      // (abertoId novo para ABERTURA, payload.abertoId para FECHAMENTO) — não sobrescrever aqui,
+      // pois isso apagava o elo em fechamentos de lote (bug: toda linha P ficava vazia).
+      const rows = payload.loteSeries.map((item, idx) => {
         const linhaMod = [...linha];
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
-        linhaMod[6]  = qtdRePorSerie;          // G — qtd realizada por série
-        linhaMod[14] = String(qtdPlPorSerie);  // O — qtd planejada por série
-        linhaMod[15] = abertoId; // P — lote: todas as séries compartilham o mesmo abertoId (Fix#ID-LINK)
+        linhaMod[6]  = qtdRePorSerieArr[idx];          // G — qtd realizada por série
+        linhaMod[14] = String(qtdPlPorSerieArr[idx]);  // O — qtd planejada por série
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
       abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
     } else if (payload.lote && payload.lote.trim() !== '') {
-      // Formato legado — batch write com divisão proporcional também
+      // Formato legado — mesma distribuição sem sobra; também não sobrescreve linha[15]
+      // (ver comentário acima sobre o bug do elo de pareamento em fechamentos de lote)
       const series = payload.lote.split(',').map(s => s.trim()).filter(Boolean);
       const numSeriesLeg = series.length;
       const qtdPlTotLeg  = Number(payload.qtdPlanejada || 0);
       const qtdReTotLeg  = (qtd === '' ? 0 : Number(qtd));
-      const qtdPlLeg = numSeriesLeg > 0 ? Math.ceil(qtdPlTotLeg / numSeriesLeg) : qtdPlTotLeg;
-      const qtdReLeg = numSeriesLeg > 0 ? Math.ceil(qtdReTotLeg / numSeriesLeg) : qtdReTotLeg;
-      const rows = series.map(serie => {
+      const distribuirQtdLeg = (total, n) => {
+        if (n <= 0) return [];
+        const base  = Math.floor(total / n);
+        const resto = total - base * n;
+        return Array.from({ length: n }, (_, i) => base + (i < resto ? 1 : 0));
+      };
+      const qtdPlPorSerieLeg = distribuirQtdLeg(qtdPlTotLeg, numSeriesLeg);
+      const qtdRePorSerieLeg = distribuirQtdLeg(qtdReTotLeg, numSeriesLeg);
+      const rows = series.map((serie, idx) => {
         const linhaMod = [...linha];
         linhaMod[5]  = serie + ' | ' + payload.implemento + ' | ' + payload.cliente;
-        linhaMod[6]  = qtdReLeg;
-        linhaMod[14] = String(qtdPlLeg);
-        linhaMod[15] = abertoId || gerarIdApontamento(); // P — Bug#30: lote legado usa abertoId
+        linhaMod[6]  = qtdRePorSerieLeg[idx];
+        linhaMod[14] = String(qtdPlPorSerieLeg[idx]);
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
@@ -963,26 +1063,8 @@ function gravarApontamento(payload) {
       abaRe.appendRow(linha);
     }
 
-    // ---------------------------------------------------------------
-    // FECHAMENTO: lê LoteSeries (col 11) da aba Abertos já lida acima.
-    // Match preferencial por AbertoId (col 12); fallback por operador.
-    // ---------------------------------------------------------------
-    let loteSeriesFechamento = null;
-    if (tipo === 'FECHAMENTO') {
-      const abertoIdPayload = String(payload.abertoId || '').trim();
-      for (let i = 1; i < dadosAbertos.length; i++) {
-        const rowId   = String(dadosAbertos[i][12] || '').trim();
-        const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
-        const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
-        if (matchId || matchOp) {
-          const loteJson = String(dadosAbertos[i][11] || '');
-          if (loteJson) {
-            try { loteSeriesFechamento = JSON.parse(loteJson); } catch(e) {}
-          }
-          break;
-        }
-      }
-    }
+    // loteSeriesFechamento já foi preenchido na validação acima (quando tipo === 'FECHAMENTO'
+    // e a abertura original era um lote) — reaproveitado aqui no saldo parcial.
 
     // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
     atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
@@ -1093,6 +1175,26 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
       const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
       const matchOp = !matchId && mesmoOperador(dados[i][0], operador);
       if (matchId || matchOp) {
+        const loteAbertoRaw = String(dados[i][11] || '').trim();
+        const loteFechamentoPayload = payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
+
+        // Fechamento parcial de lote: remove só as séries fechadas agora, mantém o resto aberto.
+        if (loteAbertoRaw && loteFechamentoPayload) {
+          let seriesOriginais = [];
+          try { seriesOriginais = JSON.parse(loteAbertoRaw); } catch(e) {}
+          const nrSeriesFechadasAgora = new Set(payload.loteSeries.map(s => String(s.nrSerie).trim()));
+          const restantes = seriesOriginais.filter(s => !nrSeriesFechadasAgora.has(String(s.nrSerie).trim()));
+
+          if (restantes.length > 0) {
+            // Ainda sobram séries abertas — atualiza a linha em vez de removê-la
+            const qtdPlanejadaRestante = restantes.reduce((soma, s) => soma + (Number(s.qtdPlanejada) || 0), 0);
+            aba.getRange(i + 1, 7).setValue(qtdPlanejadaRestante);       // col G (índice 6) — QtdPlanejada
+            aba.getRange(i + 1, 12).setValue(JSON.stringify(restantes)); // col L (índice 11) — LoteSeries
+            return;
+          }
+          // restantes.length === 0 → lote inteiro fechado, cai para a remoção normal abaixo
+        }
+
         // Bug fix: Google Sheets não permite excluir TODAS as linhas não-congeladas.
         // Se esta for a última linha de dados (sheet terá só o cabeçalho), limpa o conteúdo
         // da célula em vez de deletar a linha — evita "Não é possível excluir todas as linhas".
@@ -1619,6 +1721,63 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
     aba.getRange(linha, 3).setValue(operacao);
     aba.getRange(linha, 4).setValue(novoSaldo);
     aba.getRange(linha, 5).setValue(carimbo);
+  }
+}
+
+// Recalcula o saldo parcial de uma chave (NrSerie+CodItem+Operacao) DO ZERO, "replay"
+// de todos os FECHAMENTOs dessa chave em ordem cronológica — em vez de aplicar um delta
+// na cima do valor acumulado existente. Necessário porque editarApontamento pode alterar
+// um FECHAMENTO antigo cujo efeito já foi "consumido" por fechamentos posteriores; um
+// delta simples ficaria incorreto nesse cenário, enquanto o replay sempre reflete a
+// realidade atual da planilha, não importa quantas edições aconteçam.
+// dadosRePreCarregado (opcional): array já lido por quem chamou (mesma forma de
+// getDataRange().getValues(), com cabeçalho na posição 0), refletindo o estado ATUAL
+// (pós-edição/remoção) da planilha. Quando fornecido, evita uma releitura completa
+// redundante — usado por editarApontamento e removerRegistroPorAbertoId, que já têm
+// os dados em memória no momento em que chamam esta função.
+function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado) {
+  if (!nrSerie || !codItem) return;
+  const ss      = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaSaldo = garantirAbaSaldo(ss);
+  let dadosRe = dadosRePreCarregado;
+  if (!dadosRe) {
+    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+    if (!abaRe) return;
+    dadosRe = abaRe.getDataRange().getValues();
+  }
+  const codItemNorm = String(codItem).trim();
+
+  const eventos = [];
+  for (let i = 1; i < dadosRe.length; i++) {
+    if (String(dadosRe[i][COL_RE.TIPO] || '').trim() !== 'FECHAMENTO') continue;
+    const serieLinha = String(dadosRe[i][COL_RE.SERIE] || '').split('|')[0].trim();
+    const itemLinha  = String(dadosRe[i][COL_RE.COD_ITEM] || '').trim();
+    const opLinha    = String(dadosRe[i][COL_RE.OPERACAO] || '').substring(0, 4);
+    if (!mesmoOperador(serieLinha, nrSerie)) continue;
+    if (itemLinha !== codItemNorm) continue;
+    if (!mesmoOperador(opLinha, operacao)) continue;
+    eventos.push({
+      qtdPlanejada: Number(dadosRe[i][COL_RE.QTD_PLANEJADA]) || 0,
+      qtdRealizada: Number(dadosRe[i][COL_RE.QTD]) || 0,
+      carimbo: dadosRe[i][COL_RE.CARIMBO],
+    });
+  }
+
+  let saldo = null;
+  let ultimoCarimbo = '';
+  eventos.forEach(ev => {
+    saldo = (saldo === null) ? Math.max(0, ev.qtdPlanejada - ev.qtdRealizada) : Math.max(0, saldo - ev.qtdRealizada);
+    ultimoCarimbo = ev.carimbo;
+  });
+
+  const dadosSaldo = abaSaldo.getDataRange().getValues();
+  for (let i = dadosSaldo.length - 1; i >= 1; i--) {
+    if (mesmoOperador(dadosSaldo[i][0], nrSerie) && String(dadosSaldo[i][1] || '').trim() === codItemNorm && mesmoOperador(dadosSaldo[i][2], operacao)) {
+      abaSaldo.deleteRow(i + 1);
+    }
+  }
+  if (saldo !== null && saldo > 0) {
+    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo]);
   }
 }
 
@@ -3635,46 +3794,343 @@ function limparRegistrosTeste() {
 // Execute via: ?action=removerRegistroPorId&key=AGF2026&id=AP-XXXXXX
 // ================================================================
 function removerRegistroPorAbertoId(idAlvo) {
+  // Bug fix (concorrência): esta função fazia deleteRow sem nenhum lock — se rodasse ao
+  // mesmo tempo que gravarApontamento/editarApontamento (que seguram o lock global), os
+  // índices de linha lidos por uma operação podiam ficar inválidos pela outra, corrompendo
+  // a linha errada. Agora usa o mesmo LockService das demais operações de escrita.
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (lockErr) {
+    return { success: false, message: 'Servidor ocupado. Tente novamente em instantes.' };
+  }
+  try {
+    const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+    const abaAb = garantirAbaAbertos(ss);
+    let removidosRe = 0;
+    let removidosAb = 0;
+    // Bug fix: ao remover FECHAMENTOs, o Saldo_Parcial daquela chave (série+item+operação)
+    // fica órfão com um valor desatualizado se não for recalculado depois da remoção.
+    const chavesSaldoParaRecalcular = [];
+
+    // Remove de Respostas (col P = índice 15)
+    // Perf fix: antes fazia clearContents() + reescrevia TODAS as linhas válidas de volta —
+    // custoso numa planilha com milhares de linhas pra remover só 1-8. Agora usa deleteRows()
+    // direcionado nas linhas que batem, de baixo pra cima (evita deslocamento de índice).
+    // dadosRePosRemocao guarda a versão em memória já sem as linhas removidas, reaproveitada
+    // no recálculo de saldo abaixo — evita uma segunda leitura completa da planilha.
+    let dadosRePosRemocao = null;
+    if (abaRe) {
+      const dadosRe = abaRe.getDataRange().getValues();
+      const linhasParaRemover = [];
+      dadosRePosRemocao = [dadosRe[0]]; // mantém cabeçalho
+      for (let i = 1; i < dadosRe.length; i++) {
+        if (String(dadosRe[i][15] || '').trim() === idAlvo) {
+          removidosRe++;
+          linhasParaRemover.push(i + 1); // linha na planilha (1-indexed)
+          if (String(dadosRe[i][2] || '').trim() === 'FECHAMENTO') {
+            chavesSaldoParaRecalcular.push({
+              nrSerie:  String(dadosRe[i][5] || '').split('|')[0].trim(),
+              codItem:  String(dadosRe[i][4] || '').trim(),
+              operacao: String(dadosRe[i][3] || '').substring(0, 4),
+            });
+          }
+        } else {
+          dadosRePosRemocao.push(dadosRe[i]);
+        }
+      }
+      for (let k = linhasParaRemover.length - 1; k >= 0; k--) {
+        abaRe.deleteRow(linhasParaRemover[k]);
+      }
+    }
+
+    // Remove de Abertos (col 12 = índice 12)
+    if (abaAb) {
+      const dadosAb = abaAb.getDataRange().getValues();
+      for (let i = dadosAb.length - 1; i >= 1; i--) {
+        if (String(dadosAb[i][12] || '').trim() === idAlvo) {
+          abaAb.deleteRow(i + 1);
+          removidosAb++;
+        }
+      }
+    }
+
+    SpreadsheetApp.flush();
+
+    // Recalcula Saldo_Parcial (do zero, replay) para cada chave afetada pelos FECHAMENTOs removidos.
+    // Passa dadosRePosRemocao (já em memória, já sem as linhas removidas) — evita reler a planilha.
+    chavesSaldoParaRecalcular.forEach(c => {
+      if (c.nrSerie && c.codItem) recalcularSaldoParcial(c.nrSerie, c.codItem, c.operacao, dadosRePosRemocao);
+    });
+
+    return {
+      removidosRespostas: removidosRe,
+      removidosAbertos: removidosAb,
+      saldoRecalculado: chavesSaldoParaRecalcular.length > 0,
+      mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// ================================================================
+// REMOVER POR CARIMBO + CÓDIGO DO ITEM — limpeza de registros de teste que não
+// têm abertoId para usar removerRegistroPorAbertoId (ex.: fechamentos de lote
+// gravados antes do fix do elo de pareamento, com Coluna 16 vazia).
+// Execute via: ?action=removerPorCarimboECodItem&key=AGF2026&carimbo=...&codItem=...
+// ================================================================
+function removerRegistroPorCarimboECodItem(carimbo, codItem) {
   const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
   const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
-  const abaAb = garantirAbaAbertos(ss);
-  let removidosRe = 0;
-  let removidosAb = 0;
-
-  // Remove de Respostas (col P = índice 15)
+  let removidos = 0;
   if (abaRe) {
     const dadosRe = abaRe.getDataRange().getValues();
-    const linhasValidas = [dadosRe[0]]; // mantém cabeçalho
-    for (let i = 1; i < dadosRe.length; i++) {
-      if (String(dadosRe[i][15] || '').trim() === idAlvo) {
-        removidosRe++;
-      } else {
-        linhasValidas.push(dadosRe[i]);
-      }
-    }
-    if (removidosRe > 0) {
-      abaRe.clearContents();
-      abaRe.getRange(1, 1, linhasValidas.length, dadosRe[0].length).setValues(linhasValidas);
-    }
-  }
-
-  // Remove de Abertos (col 12 = índice 12)
-  if (abaAb) {
-    const dadosAb = abaAb.getDataRange().getValues();
-    for (let i = dadosAb.length - 1; i >= 1; i--) {
-      if (String(dadosAb[i][12] || '').trim() === idAlvo) {
-        abaAb.deleteRow(i + 1);
-        removidosAb++;
+    for (let i = dadosRe.length - 1; i >= 1; i--) {
+      const carimboLinha = dadosRe[i][0] instanceof Date
+        ? Utilities.formatDate(dadosRe[i][0], 'GMT-3', 'dd/MM/yyyy HH:mm:ss')
+        : String(dadosRe[i][0] || '');
+      if (carimboLinha === carimbo && String(dadosRe[i][4] || '') === codItem) {
+        abaRe.deleteRow(i + 1);
+        removidos++;
       }
     }
   }
-
   SpreadsheetApp.flush();
-  return {
-    removidosRespostas: removidosRe,
-    removidosAbertos: removidosAb,
-    mensagem: `ID ${idAlvo}: ${removidosRe} linha(s) removida(s) de Respostas, ${removidosAb} de Abertos.`
-  };
+  return { removidos, mensagem: `${removidos} linha(s) removida(s) com carimbo "${carimbo}" e codItem "${codItem}".` };
+}
+
+// ================================================================
+// EDITAR APONTAMENTO — edita um registro específico (uma linha de Respostas),
+// sincroniza a aba Abertos (se ainda em aberto) e recalcula Saldo_Parcial (se
+// o registro editado for um FECHAMENTO ou afetar a chave de saldo).
+//
+// Identificação do registro: abertoId + tipoAlvo + nrSerieAlvo. Isso é necessário
+// porque um abertoId pode ter várias linhas (lote: N séries × ABERTURA/FECHAMENTO).
+//
+// payload: {
+//   action: 'editarApontamento', key: 'AGF2026',
+//   abertoId, tipoAlvo, nrSerieAlvo,
+//   novosValores: { carimbo, operador, operadorNome, tipo, operacao, codItem,
+//                    nrSerie, implemento, cliente, quantidade, qtdPlanejada,
+//                    obs1, obs2, retrabalho, numRNC, parada, opRetrabalho, setup }
+// }
+//
+// LIMITAÇÃO INTENCIONAL: alterar `tipo` é uma sobrescrita direta — não revalida
+// compatibilidade com o resto do par/lote. Use com cuidado.
+// ================================================================
+function editarApontamento(payload) {
+  if (payload.key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+
+  // Perf: 20s (era 15s) — mesma margem aplicada em gravarApontamento, ver comentário lá.
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (lockErr) {
+    return jsonResponse({ success: false, message: 'Servidor ocupado. Tente novamente em instantes.' });
+  }
+  try {
+    const abertoId    = String(payload.abertoId || '').trim();
+    const tipoAlvo     = payload.tipoAlvo || '';
+    const nrSerieAlvo  = String(payload.nrSerieAlvo || '').trim();
+    const nv           = payload.novosValores || {};
+
+    if (!abertoId) return jsonResponse({ success: false, message: 'abertoId é obrigatório.' });
+    if (!TIPOS_APONTAMENTO[tipoAlvo]) return jsonResponse({ success: false, message: 'tipoAlvo inválido: "' + tipoAlvo + '".' });
+
+    const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+    if (!abaRe) return jsonResponse({ success: false, message: 'Aba "' + ABA_RESPOSTAS + '" não encontrada.' });
+    const dadosRe = abaRe.getDataRange().getValues();
+
+    const tipoFormatadoAlvo = TIPOS_APONTAMENTO[tipoAlvo];
+    let linhaIdx = -1;
+    for (let i = 1; i < dadosRe.length; i++) {
+      if (String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim() !== abertoId) continue;
+      if (String(dadosRe[i][COL_RE.TIPO] || '').trim() !== tipoFormatadoAlvo) continue;
+      const serieLinha = String(dadosRe[i][COL_RE.SERIE] || '').split('|')[0].trim();
+      if (serieLinha !== nrSerieAlvo) continue;
+      linhaIdx = i;
+      break;
+    }
+    if (linhaIdx === -1) {
+      return jsonResponse({ success: false, message: 'Registro não encontrado (abertoId/tipo/série não correspondem a nenhuma linha).' });
+    }
+
+    const linhaAntiga = [...dadosRe[linhaIdx]];
+    const tiposAbertura = ['ABERTURA', 'INICIO_RETRABALHO', 'INICIO_PARADA'];
+
+    const opAntiga    = String(linhaAntiga[COL_RE.OPERACAO] || '').substring(0, 4);
+    const itemAntigo  = String(linhaAntiga[COL_RE.COD_ITEM] || '').trim();
+    const serieAntiga = String(linhaAntiga[COL_RE.SERIE] || '').split('|')[0].trim();
+
+    // ---------------------------------------------------------------
+    // Localiza a linha correspondente em Abertos (se o registro ainda está aberto)
+    // ---------------------------------------------------------------
+    const abaAb = garantirAbaAbertos(ss);
+    const dadosAbertos = abaAb.getDataRange().getValues();
+    let linhaAbertosIdx = -1;
+    for (let i = 1; i < dadosAbertos.length; i++) {
+      if (String(dadosAbertos[i][COL_AB.ABERTO_ID] || '').trim() === abertoId) { linhaAbertosIdx = i; break; }
+    }
+    const estaAberto = linhaAbertosIdx !== -1;
+
+    // ---------------------------------------------------------------
+    // VALIDAÇÕES
+    // ---------------------------------------------------------------
+    // 1) Mudança de operador num registro de abertura ainda em aberto: não pode
+    //    colidir com outro apontamento já aberto desse novo operador.
+    if (nv.operador !== undefined && tiposAbertura.includes(tipoAlvo) && estaAberto) {
+      const novoOperadorNorm = normalizarCodigoOp(nv.operador);
+      const operadorAtualAbertos = String(dadosAbertos[linhaAbertosIdx][COL_AB.OPERADOR] || '');
+      if (!mesmoOperador(novoOperadorNorm, operadorAtualAbertos)) {
+        for (let i = 1; i < dadosAbertos.length; i++) {
+          if (i === linhaAbertosIdx) continue;
+          if (!dadosAbertos[i][COL_AB.OPERADOR]) continue;
+          if (mesmoOperador(dadosAbertos[i][COL_AB.OPERADOR], novoOperadorNorm)) {
+            return jsonResponse({ success: false, message: 'O operador informado já possui outro apontamento em aberto.' });
+          }
+        }
+      }
+    }
+
+    // 2) Mudança de série: valida caractere proibido, duplicidade dentro do mesmo
+    //    abertoId/tipo (mesmo lote) e existência no cadastro.
+    if (nv.nrSerie !== undefined && String(nv.nrSerie).trim() !== serieAntiga) {
+      const novaSerieNorm = String(nv.nrSerie).trim();
+      if (novaSerieNorm.includes('|')) {
+        return jsonResponse({ success: false, message: 'Campo nrSerie não pode conter o caractere "|".' });
+      }
+      for (let i = 1; i < dadosRe.length; i++) {
+        if (i === linhaIdx) continue;
+        if (String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim() !== abertoId) continue;
+        if (String(dadosRe[i][COL_RE.TIPO] || '').trim() !== tipoFormatadoAlvo) continue;
+        const outraSerie = String(dadosRe[i][COL_RE.SERIE] || '').split('|')[0].trim();
+        if (outraSerie === novaSerieNorm) {
+          return jsonResponse({ success: false, message: 'Já existe outra série igual a "' + novaSerieNorm + '" neste mesmo apontamento.' });
+        }
+      }
+      if (novaSerieNorm) {
+        const abaSeries = ss.getSheetByName(ABA_SERIES);
+        if (abaSeries) {
+          const seriesData = abaSeries.getDataRange().getValues().slice(1);
+          const seriesValidas = new Set(
+            seriesData.filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '').map(r => String(r[0]).trim())
+          );
+          if (!seriesValidas.has(novaSerieNorm)) {
+            return jsonResponse({ success: false, message: 'Série "' + novaSerieNorm + '" não encontrada no cadastro.' });
+          }
+        }
+      }
+    }
+
+    // 3) Validações de valor numérico
+    if (nv.quantidade !== undefined && nv.quantidade !== '' && nv.quantidade !== null) {
+      const q = Number(nv.quantidade);
+      if (isNaN(q) || q < 0) return jsonResponse({ success: false, message: 'Quantidade inválida.' });
+    }
+    if (nv.qtdPlanejada !== undefined && nv.qtdPlanejada !== '' && nv.qtdPlanejada !== null) {
+      const qp = Number(nv.qtdPlanejada);
+      if (isNaN(qp) || qp < 0) return jsonResponse({ success: false, message: 'Quantidade planejada inválida.' });
+    }
+
+    // ---------------------------------------------------------------
+    // APLICA EDIÇÕES — Respostas
+    // ---------------------------------------------------------------
+    const linhaNova = [...linhaAntiga];
+    if (nv.carimbo !== undefined)      linhaNova[COL_RE.CARIMBO] = nv.carimbo;
+    if (nv.operadorNome !== undefined) linhaNova[COL_RE.OPERADOR] = nv.operadorNome;
+    if (nv.tipo !== undefined)         linhaNova[COL_RE.TIPO] = TIPOS_APONTAMENTO[nv.tipo] || nv.tipo;
+    if (nv.operacao !== undefined)     linhaNova[COL_RE.OPERACAO] = OPERACOES[nv.operacao] || nv.operacao;
+    if (nv.codItem !== undefined)      linhaNova[COL_RE.COD_ITEM] = nv.codItem;
+    if (nv.nrSerie !== undefined || nv.implemento !== undefined || nv.cliente !== undefined) {
+      const partesAntigas = String(linhaAntiga[COL_RE.SERIE] || '').split('|').map(s => s.trim());
+      const nrS  = nv.nrSerie    !== undefined ? String(nv.nrSerie).trim()    : (partesAntigas[0] || '');
+      const impl = nv.implemento !== undefined ? String(nv.implemento).trim() : (partesAntigas[1] || '');
+      const cli  = nv.cliente    !== undefined ? String(nv.cliente).trim()    : (partesAntigas[2] || '');
+      linhaNova[COL_RE.SERIE] = nrS ? (nrS + ' | ' + impl + ' | ' + cli) : impl;
+    }
+    if (nv.quantidade !== undefined)    linhaNova[COL_RE.QTD] = nv.quantidade === '' ? '' : Number(nv.quantidade);
+    if (nv.obs1 !== undefined)          linhaNova[COL_RE.OBS1] = nv.obs1;
+    if (nv.retrabalho !== undefined)    linhaNova[COL_RE.TIPO_RETRAB] = nv.retrabalho;
+    if (nv.numRNC !== undefined)        linhaNova[COL_RE.NR_RNC] = nv.numRNC;
+    if (nv.parada !== undefined)        linhaNova[COL_RE.TIPO_PARADA] = nv.parada;
+    if (nv.opRetrabalho !== undefined)  linhaNova[COL_RE.OPERACAO2] = OPERACOES[nv.opRetrabalho] || nv.opRetrabalho;
+    if (nv.setup !== undefined)         linhaNova[COL_RE.TIPO_SETUP] = nv.setup;
+    if (nv.obs2 !== undefined)          linhaNova[COL_RE.OBS2] = nv.obs2;
+    if (nv.qtdPlanejada !== undefined)  linhaNova[COL_RE.QTD_PLANEJADA] = nv.qtdPlanejada === '' ? '' : Number(nv.qtdPlanejada);
+
+    abaRe.getRange(linhaIdx + 1, 1, 1, linhaNova.length).setValues([linhaNova]);
+    // Reflete a edição na cópia em memória — reaproveitada no recálculo de saldo abaixo,
+    // evitando uma releitura completa da planilha que acabamos de escrever.
+    dadosRe[linhaIdx] = linhaNova;
+
+    // ---------------------------------------------------------------
+    // SINCRONIZA Abertos (se o registro ainda está aberto)
+    // ---------------------------------------------------------------
+    let abertosSincronizado = false;
+    if (estaAberto) {
+      const rowAb = [...dadosAbertos[linhaAbertosIdx]];
+      const loteRaw = String(rowAb[COL_AB.LOTE_SERIES] || '').trim();
+
+      if (loteRaw) {
+        let seriesArr = [];
+        try { seriesArr = JSON.parse(loteRaw); } catch (e) {}
+        const idxSerie = seriesArr.findIndex(s => String(s.nrSerie).trim() === nrSerieAlvo);
+        if (idxSerie !== -1) {
+          if (nv.nrSerie !== undefined)     seriesArr[idxSerie].nrSerie = String(nv.nrSerie).trim();
+          if (nv.implemento !== undefined)  seriesArr[idxSerie].implemento = nv.implemento;
+          if (nv.cliente !== undefined)     seriesArr[idxSerie].cliente = nv.cliente;
+          if (nv.qtdPlanejada !== undefined) seriesArr[idxSerie].qtdPlanejada = Number(nv.qtdPlanejada) || 0;
+          rowAb[COL_AB.LOTE_SERIES] = JSON.stringify(seriesArr);
+          rowAb[COL_AB.QTD_PLANEJADA] = seriesArr.reduce((s, x) => s + (Number(x.qtdPlanejada) || 0), 0);
+        }
+      } else {
+        if (nv.nrSerie !== undefined)     { rowAb[COL_AB.NR_SERIE] = nv.nrSerie; }
+        if (nv.implemento !== undefined)   rowAb[COL_AB.IMPLEMENTO_NOME] = nv.implemento;
+        if (nv.cliente !== undefined)      rowAb[COL_AB.CLIENTE] = nv.cliente;
+        if (nv.qtdPlanejada !== undefined) rowAb[COL_AB.QTD_PLANEJADA] = nv.qtdPlanejada;
+      }
+      if (nv.operador !== undefined)     rowAb[COL_AB.OPERADOR] = normalizarCodigoOp(nv.operador);
+      if (nv.operadorNome !== undefined) rowAb[COL_AB.OPERADOR_NOME] = nv.operadorNome;
+      if (nv.operacao !== undefined)     rowAb[COL_AB.OPERACAO] = OPERACOES[nv.operacao] || nv.operacao;
+      if (nv.codItem !== undefined)      rowAb[COL_AB.COD_ITEM] = nv.codItem;
+      if (nv.carimbo !== undefined)      rowAb[COL_AB.CARIMBO] = nv.carimbo;
+
+      abaAb.getRange(linhaAbertosIdx + 1, 1, 1, rowAb.length).setValues([rowAb]);
+      abertosSincronizado = true;
+    }
+
+    SpreadsheetApp.flush();
+
+    // ---------------------------------------------------------------
+    // RECALCULA Saldo_Parcial (só se o registro editado for um FECHAMENTO)
+    // ---------------------------------------------------------------
+    let saldoRecalculado = false;
+    if (tipoFormatadoAlvo === 'FECHAMENTO') {
+      const opNova    = nv.operacao !== undefined ? String(nv.operacao).substring(0, 4) : opAntiga;
+      const itemNovo  = nv.codItem  !== undefined ? String(nv.codItem).trim() : itemAntigo;
+      const serieNova = nv.nrSerie  !== undefined ? String(nv.nrSerie).trim() : serieAntiga;
+
+      recalcularSaldoParcial(serieAntiga, itemAntigo, opAntiga, dadosRe);
+      if (serieNova !== serieAntiga || itemNovo !== itemAntigo || opNova !== opAntiga) {
+        recalcularSaldoParcial(serieNova, itemNovo, opNova, dadosRe);
+      }
+      saldoRecalculado = true;
+    }
+
+    return jsonResponse({
+      success: true,
+      message: 'Apontamento atualizado.',
+      abertosSincronizado: abertosSincronizado,
+      saldoRecalculado: saldoRecalculado,
+    });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message });
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ================================================================
