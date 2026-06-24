@@ -853,16 +853,14 @@ function iniciarFechamentoRapido() {
   document.getElementById('btn-FECHAMENTO').classList.add('sel-blue');
   atualizarBotoesTipo();
 
-  // Preenche bloco de fechamento inteligente
+  // Preenche bloco de fechamento inteligente — reaproveita a mesma função usada no fluxo
+  // normal de seleção de tipo (selecionarTipo→preencherFechamentoSeAberto), que já trata
+  // corretamente o caso de lote (mostra o grid de seleção de séries a fechar).
+  // Bug fix: esta função duplicava a lógica de preenchimento SEM a parte de lote, fazendo o
+  // atalho "Fechar este apontamento agora" pular a seleção de séries — o operador fechava o
+  // lote inteiro como 1 apontamento único, deixando as demais séries presas como "abertas".
   const info = state.abertoInfo;
-  document.getElementById('fechOpLabel').textContent       = info.operacao  || '—';
-  document.getElementById('fechCodItemLabel').textContent  = info.codItem   || '—';
-  const ehLoteRapido = String(info.implemento||'').toUpperCase().includes('LOTE') || String(info.nrSerie||'').toUpperCase().includes('LOTE');  // Bug#24b
-  document.getElementById('fechImplementoLabel').textContent = ehLoteRapido
-    ? '🔢 Apontamento em lote'
-    : [info.nrSerie, info.implemento, info.cliente].filter(Boolean).join(' | ') || '—';
-  document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
-  document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+  preencherFechamentoSeAberto();
 
   // Mostra campo quantidade só se operação exige
   const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix: operacao pode ser number (Sheets)
