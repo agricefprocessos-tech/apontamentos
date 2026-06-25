@@ -26,6 +26,7 @@ const ABA_OPERADORES  = 'Cadastro_Operadores';
 const ABA_SALDO       = 'Saldo_Parcial';
 const ABA_SERIES      = 'Cadastro_Series';
 const ABA_OPERACOES   = 'Cadastro_Operacoes';
+const ABA_ANALISES_IA = 'Analises_IA';
 
 // ================================================================
 // SCHEMA DE COLUNAS (0-indexed)
@@ -103,6 +104,7 @@ function doGet(e) {
   if (action === 'getCadastros')     return getCadastros();
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
+  if (action === 'getAnaliseIA')     return getAnaliseIAAction();
   if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
     try {
       enviarRelatorioSemanal();
@@ -1128,7 +1130,25 @@ function gravarApontamento(payload) {
 
 // abertoId: ID único gerado na abertura (AP-...) — usado para identificar a linha exata no fechamento
 // dadosAbertos: resultado de getDataRange().getValues() já lido pelo caller — evita releitura
+// Bug crítico descoberto em produção: um filtro básico ativo (Dados > Criar um filtro) numa
+// aba corrompe SILENCIOSAMENTE aba.deleteRow() via Apps Script — a chamada não lança erro e
+// o código de quem chamou segue achando que removeu, mas a linha continua lá. Isso explica
+// fechamentos que "voltam a aparecer como abertos": a remoção da aba Abertos falhava sem
+// avisar. Chamar isto ANTES de qualquer deleteRow nas abas críticas neutraliza o problema.
+function removerFiltroSeExistir(aba) {
+  try {
+    const filtro = aba.getFilter();
+    if (filtro) {
+      filtro.remove();
+      Logger.log('⚠️ Filtro ativo removido na aba "' + aba.getName() + '" antes de deleteRow (evita corrupção silenciosa).');
+    }
+  } catch (e) {
+    Logger.log('removerFiltroSeExistir: ' + e.message);
+  }
+}
+
 function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId) {
+  removerFiltroSeExistir(aba);
   const operador   = normalizarCodigoOp(payload.operador || ''); // sempre 6 dígitos
   const implemento = payload.nrSerie   || payload.implemento || '';
   const dados      = dadosAbertos;
@@ -1664,6 +1684,24 @@ function garantirAbaSaldo(ss) {
     aba.getRange('B:B').setNumberFormat('@'); // CodItem
     aba.getRange('C:C').setNumberFormat('@'); // Operacao ← crítico: '0010' vira 10 sem isso
     aba.getRange('E:E').setNumberFormat('@'); // UltimaAtualizacao
+  }
+  return aba;
+}
+
+// ================================================================
+// ANÁLISES DE IA — armazena a última análise gerada por tipo (diario/semanal).
+// Colunas: 0:Data 1:Tipo 2:Texto
+// Mantém só 1 linha por Tipo (sobrescreve a anterior) — não cresce indefinidamente.
+// ================================================================
+function garantirAbaAnaliseIA(ss) {
+  let aba = ss.getSheetByName(ABA_ANALISES_IA);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_ANALISES_IA);
+    const cab = ['Data', 'Tipo', 'Texto'];
+    aba.appendRow(cab);
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, cab.length).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+    aba.getRange('A:A').setNumberFormat('@'); // Data ← evita autoconversão do Sheets p/ Date nativo
   }
   return aba;
 }
@@ -2376,6 +2414,217 @@ function testeGravar() {
   Logger.log(gravarApontamento(payload).getContent());
 }
 
+// Execute esta função UMA VEZ manualmente pelo Editor (não via URL) para que o
+// Google solicite a tela de autorização do escopo "Conectar-se a um serviço
+// externo" (UrlFetchApp para fora do Google) — necessário para a IA funcionar.
+function autorizarAcessoExternoIA() {
+  const resp = UrlFetchApp.fetch('https://api.anthropic.com', { muteHttpExceptions: true });
+  Logger.log('Autorização concedida. HTTP status: ' + resp.getResponseCode());
+}
+
+// ================================================================
+// ANALISTA DE PRODUÇÃO VIRTUAL (IA) — v1.0
+//
+// Gera uma análise interpretativa (Claude API) a partir dos MESMOS dados já
+// calculados pelos relatórios diário/semanal (KPIs, tendência, top operadores,
+// backlog, alertas e recomendações de regras fixas). Não substitui essas
+// regras — adiciona uma camada de interpretação por cima delas.
+//
+// Configuração (executar UMA VEZ pelo Editor do Apps Script):
+//   configurarApiKeyAnthropic("sk-ant-...")
+//
+// Se a chamada à IA falhar por qualquer motivo (key ausente, rede, rate
+// limit), gerarAnaliseIA() retorna null e quem chamou (enviarRelatorioSemanal/
+// enviarRelatorioDiario) segue normalmente — a análise de IA NUNCA impede o
+// relatório de regras fixas de ser calculado e enviado.
+// ================================================================
+
+function configurarApiKeyAnthropic(key) {
+  if (!key || String(key).trim() === '') throw new Error('Informe a API key da Anthropic como parâmetro.');
+  PropertiesService.getScriptProperties().setProperty('ANTHROPIC_API_KEY', String(key).trim());
+  Logger.log('✅ API key da Anthropic configurada.');
+}
+
+function chamarClaudeAPI(promptTexto) {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('ANTHROPIC_API_KEY');
+  if (!apiKey) throw new Error('API key da Anthropic não configurada. Execute configurarApiKeyAnthropic("sua-key") uma vez pelo editor.');
+  const resp = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    payload: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1200,
+      messages: [{ role: 'user', content: promptTexto }],
+    }),
+    muteHttpExceptions: true,
+  });
+  const codigo = resp.getResponseCode();
+  const corpo  = resp.getContentText();
+  if (codigo !== 200) {
+    throw new Error('Erro Claude API (HTTP ' + codigo + '): ' + corpo.substring(0, 300));
+  }
+  const json = JSON.parse(corpo);
+  if (!json.content || !json.content[0] || !json.content[0].text) {
+    throw new Error('Resposta inesperada da Claude API: ' + corpo.substring(0, 300));
+  }
+  return json.content[0].text;
+}
+
+// Monta o prompt a partir do MESMO objeto `rel` retornado por
+// _rsMontarRelatorio() (tipo='semanal') ou _rdMontarRelatorio() (tipo='diario').
+// Defensivo: cada seção só entra no resumo se o campo existir nos dados.
+function montarPromptAnalise(rel, tipo) {
+  const fmtData = function(d) { return Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy'); };
+  let resumo = '';
+
+  if (tipo === 'semanal') {
+    const kpiAtual = rel.kpiAtual || {}, kpiAnterior = rel.kpiAnterior || {};
+    resumo += 'KPIs da semana atual: ' + (kpiAtual.throughput || 0) + ' entregas, ' + (kpiAtual.entradas || 0)
+      + ' novas entradas, lead time médio ' + (kpiAtual.leadMedio || 0).toFixed(1) + 'h.\n';
+    resumo += 'KPIs da semana anterior: ' + (kpiAnterior.throughput || 0) + ' entregas, ' + (kpiAnterior.entradas || 0)
+      + ' entradas, lead time médio ' + (kpiAnterior.leadMedio || 0).toFixed(1) + 'h.\n\n';
+
+    if (rel.trend && rel.trend.length) {
+      resumo += 'Tendência das últimas 4 semanas (entradas / saídas / lead time):\n';
+      rel.trend.forEach(function(t) {
+        resumo += '- semana de ' + fmtData(t.ini) + ': ' + t.entradas + ' entradas, ' + t.throughput + ' saídas, lead time ' + t.leadMedio.toFixed(1) + 'h\n';
+      });
+      resumo += '\n';
+    }
+    if (rel.topOperadores && rel.topOperadores.length) {
+      resumo += 'Top operadores (mais fechamentos na semana):\n';
+      rel.topOperadores.forEach(function(e) { resumo += '- ' + e[0] + ': ' + e[1] + ' fechamentos\n'; });
+      resumo += '\n';
+    }
+    if (rel.topOperacoes && rel.topOperacoes.length) {
+      resumo += 'Top operações (mais saídas na semana):\n';
+      rel.topOperacoes.forEach(function(e) { resumo += '- ' + e[0] + ': ' + e[1] + '\n'; });
+      resumo += '\n';
+    }
+    const backlog = rel.backlog || [];
+    resumo += 'Backlog atual: ' + backlog.length + ' ordens em aberto.\n';
+    if (backlog.length > 0) {
+      resumo += 'Ordens mais antigas em aberto (até 10):\n';
+      backlog.slice(0, 10).forEach(function(o) {
+        const dias = Math.floor((rel.agora - o.ts) / 86400000);
+        resumo += '- ' + (o.func || '(sem nome)') + ' | operação: ' + (o.op || '—') + ' | item: ' + (o.item || '—') + ' | aberta há ' + dias + ' dia(s)\n';
+      });
+    }
+    resumo += '\nAlertas já identificados pelo sistema (regras fixas):\n';
+    (rel.alertas || []).forEach(function(a) { resumo += '- [' + a.nivel + '] ' + a.msg + '\n'; });
+    resumo += '\nRecomendações já geradas pelo sistema (regras fixas):\n';
+    (rel.recos || []).forEach(function(r) { resumo += '- ' + r + '\n'; });
+  } else {
+    // diario
+    resumo += 'Referência: ' + (rel.refDiaLabel || 'hoje') + '.\n';
+    const backlog = rel.backlog || [];
+    resumo += 'Backlog atual: ' + backlog.length + ' ordens em aberto.\n\n';
+    if (rel.topBacklogOp && rel.topBacklogOp.length) {
+      resumo += 'Operadores com mais ordens em aberto:\n';
+      rel.topBacklogOp.forEach(function(e) { resumo += '- ' + e[0] + ': ' + e[1] + ' ordem(ns)\n'; });
+      resumo += '\n';
+    }
+    if (rel.ordensAntigas && rel.ordensAntigas.length) {
+      resumo += 'Ordens mais antigas em aberto:\n';
+      rel.ordensAntigas.slice(0, 8).forEach(function(o) {
+        resumo += '- ' + (o.func || '(sem nome)') + ' | operação: ' + (o.op || '—') + ' | item: ' + (o.item || '—') + '\n';
+      });
+      resumo += '\n';
+    }
+    if (rel.topGargalos && rel.topGargalos.length) {
+      resumo += 'Operações com mais backlog (gargalos):\n';
+      rel.topGargalos.forEach(function(e) { resumo += '- ' + e[0] + ': ' + e[1] + '\n'; });
+      resumo += '\n';
+    }
+    if (rel.topSeries && rel.topSeries.length) {
+      resumo += 'Séries com mais backlog:\n';
+      rel.topSeries.forEach(function(e) { resumo += '- ' + e[0] + ': ' + e[1] + '\n'; });
+      resumo += '\n';
+    }
+    if (rel.semAtividade && rel.semAtividade.length) {
+      resumo += 'Operadores sem atividade recente: ' + rel.semAtividade.join(', ') + '\n\n';
+    }
+    if (rel.retrAbertos && rel.retrAbertos.length) {
+      resumo += 'Retrabalhos em aberto: ' + rel.retrAbertos.length + '\n\n';
+    }
+    resumo += 'Alertas já identificados pelo sistema (regras fixas):\n';
+    (rel.alertas || []).forEach(function(a) { resumo += '- [' + a.nivel + '] ' + a.msg + '\n'; });
+    resumo += '\nAções já recomendadas pelo sistema (regras fixas):\n';
+    (rel.acoes || []).forEach(function(a) { resumo += '- ' + a + '\n'; });
+  }
+
+  return 'Você é um analista de produção virtual de uma fábrica de implementos agrícolas (AGRICEF). '
+    + 'Você recebe abaixo os dados JÁ CALCULADOS de um relatório de produção (' + (tipo === 'semanal' ? 'semanal' : 'diário') + '). '
+    + 'Sua tarefa é interpretar esses dados como um analista experiente explicaria para a gestão da fábrica — não repita os números brutos, explique o que eles significam.\n\n'
+    + 'Escreva uma análise curta e direta (parágrafos corridos separados por linha em branco, sem markdown, sem listas com marcadores) cobrindo:\n'
+    + '1. Resumo do desempenho no período\n'
+    + '2. Quais colaboradores ou processos merecem atenção (positiva ou negativa) e por quê\n'
+    + '3. Causas prováveis dos desvios observados (com base apenas nos dados fornecidos — não invente números que não estão aqui)\n'
+    + '4. Onde estão os gargalos operacionais\n'
+    + '5. Ações concretas que a gestão pode tomar\n'
+    + '6. Se fizer alguma projeção de tendência, deixe explícito que é uma extrapolação dos dados recentes, não uma previsão estatística validada.\n\n'
+    + 'Seja direto, objetivo e específico — cite nomes/operações/números quando relevante. Máximo de 350 palavras.\n\n'
+    + '=== DADOS DO RELATÓRIO ===\n' + resumo;
+}
+
+function _salvarAnaliseIA(tipo, texto) {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba   = garantirAbaAnaliseIA(ss);
+  const dados = aba.getDataRange().getValues();
+  const agora = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+  let linhaIdx = -1;
+  for (let i = 1; i < dados.length; i++) {
+    if (String(dados[i][1] || '').trim() === tipo) { linhaIdx = i; break; }
+  }
+  if (linhaIdx === -1) {
+    aba.appendRow([agora, tipo, texto]);
+  } else {
+    aba.getRange(linhaIdx + 1, 1, 1, 3).setValues([[agora, tipo, texto]]);
+  }
+}
+
+// Orquestra: monta prompt → chama API → salva. Nunca lança erro — quem chamar
+// recebe null em caso de falha e deve seguir o fluxo normal sem a análise.
+function gerarAnaliseIA(rel, tipo) {
+  try {
+    const prompt = montarPromptAnalise(rel, tipo);
+    const texto  = chamarClaudeAPI(prompt);
+    _salvarAnaliseIA(tipo, texto);
+    return texto;
+  } catch (err) {
+    Logger.log('⚠️ Falha ao gerar análise de IA (' + tipo + '): ' + err.message);
+    return null;
+  }
+}
+
+// Endpoint: ?action=getAnaliseIA — retorna a última análise diária e semanal salvas.
+function getAnaliseIAAction() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_ANALISES_IA);
+    const resultado = { diario: null, semanal: null };
+    if (aba) {
+      const dados = aba.getDataRange().getValues();
+      for (let i = 1; i < dados.length; i++) {
+        const tipoLinha = String(dados[i][1] || '').trim();
+        if (tipoLinha === 'diario' || tipoLinha === 'semanal') {
+          const dataRaw = dados[i][0];
+          // O Sheets pode autoconverter a string de data em objeto Date nativo na célula —
+          // formata corretamente em ambos os casos para nunca expor o .toString() verboso do JS.
+          const dataFmt = (dataRaw instanceof Date)
+            ? Utilities.formatDate(dataRaw, 'GMT-3', 'dd/MM/yyyy HH:mm:ss')
+            : String(dataRaw || '');
+          resultado[tipoLinha] = { data: dataFmt, texto: String(dados[i][2] || '') };
+        }
+      }
+    }
+    return jsonResponse(resultado);
+  } catch (err) {
+    return jsonResponse({ diario: null, semanal: null, erro: err.message });
+  }
+}
+
 // ================================================================
 // RELATÓRIO SEMANAL AUTOMATIZADO — v1.0
 //
@@ -2386,7 +2635,7 @@ function testeGravar() {
 // Para testar manualmente: execute enviarRelatorioSemanal()
 // ================================================================
 
-const EMAIL_RELATORIO    = 'guilherme.souza@agricef.com.br';
+const EMAIL_RELATORIO    = 'guilherme.souza@agricef.com.br,luciano.oliveira@agricef.com.br,cerri@agricef.com.br';
 const DIAS_ALERTA_ATRASO = 3; // ordens abertas há mais que isso → alerta vermelho
 
 // ---------------------------------------------------------------
@@ -2395,6 +2644,7 @@ const DIAS_ALERTA_ATRASO = 3; // ordens abertas há mais que isso → alerta ver
 function enviarRelatorioSemanal() {
   try {
     const rel = _rsMontarRelatorio();
+    rel.analiseIA = gerarAnaliseIA(rel, 'semanal'); // null em caso de falha — não bloqueia o envio
     _rsEnviarEmail(rel);
     Logger.log('✅ Relatório semanal enviado para ' + EMAIL_RELATORIO);
   } catch (err) {
@@ -2671,7 +2921,21 @@ function _rsRecomendacoes(backlog, kpiAtual, kpiAnterior, topOp, topOperacoes, a
 // GERAÇÃO DO HTML DO EMAIL
 // ---------------------------------------------------------------
 function _rsGerarHtml(rel) {
-  const { agora, seg, kpiAtual, kpiAnterior, trend, topOperadores, topOperacoes, backlog, alertas, recos } = rel;
+  const { agora, seg, kpiAtual, kpiAnterior, trend, topOperadores, topOperacoes, backlog, alertas, recos, analiseIA } = rel;
+
+  // ----- HTML: Análise de IA (opcional — só aparece se gerarAnaliseIA teve sucesso) -----
+  let htmlAnaliseIA = '';
+  if (analiseIA) {
+    const paragrafos = String(analiseIA).split(/\n+/).filter(function(p) { return p.trim() !== ''; });
+    const corpoIA = paragrafos.map(function(p) {
+      return '<p style="margin:0 0 10px;font-size:13px;color:#e6edf3;line-height:1.6;">' + p + '</p>';
+    }).join('');
+    htmlAnaliseIA = '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+      + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">🤖 Análise do Analista de Produção Virtual</div>'
+      + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;"><tr><td style="padding:14px 16px;">'
+      + corpoIA
+      + '</td></tr></table></td></tr>';
+  }
 
   const fmt  = d => Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy');
   const fmtH = h => h < 1 ? Math.round(h * 60) + 'min' : h.toFixed(1) + 'h';
@@ -2883,6 +3147,9 @@ function _rsGerarHtml(rel) {
     + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;">' + htmlRecos + '</table>'
     + '</td></tr>'
 
+    // ── ANÁLISE DE IA (opcional) ──
+    + htmlAnaliseIA
+
     // ── FOOTER ──
     + '<tr><td style="background:#0d1117;padding:16px 28px;border-radius:0 0 12px 12px;border-top:1px solid #1c2230;text-align:center;">'
     + '<div style="font-size:11px;color:#58677a;">Este relatório é gerado automaticamente toda segunda-feira às 07h00 (Brasília).</div>'
@@ -2938,6 +3205,7 @@ function _rsParseData(val) {
 function enviarRelatorioDiario() {
   try {
     const rel = _rdMontarRelatorio();
+    rel.analiseIA = gerarAnaliseIA(rel, 'diario'); // null em caso de falha — não bloqueia o envio
     _rdEnviarEmail(rel);
     Logger.log('✅ Relatório diário enviado para ' + EMAIL_RELATORIO);
   } catch (err) {
@@ -3259,7 +3527,21 @@ function _rdAcoes(backlog, topOps, topGargalos, antigas, semAtividade, fechados,
 function _rdGerarHtml(rel) {
   var { agora, refDiaLabel, aberturasRef, fechadosRef,
         backlog, topBacklogOp, ordensAntigas, topGargalos, topSeries,
-        semAtividade, retrAbertos, alertas, acoes } = rel;
+        semAtividade, retrAbertos, alertas, acoes, analiseIA } = rel;
+
+  // ----- HTML: Análise de IA (opcional — só aparece se gerarAnaliseIA teve sucesso) -----
+  var htmlAnaliseIA = '';
+  if (analiseIA) {
+    var paragrafosIA = String(analiseIA).split(/\n+/).filter(function(p) { return p.trim() !== ''; });
+    var corpoIA = paragrafosIA.map(function(p) {
+      return '<p style="margin:0 0 10px;font-size:13px;color:#e6edf3;line-height:1.6;">' + p + '</p>';
+    }).join('');
+    htmlAnaliseIA = '<tr><td style="background:#111722;padding:4px 28px 16px;">'
+      + '<div style="font-size:12px;font-weight:700;color:#f0b429;text-transform:uppercase;letter-spacing:1.5px;padding:10px 0 8px;">🤖 Análise do Analista de Produção Virtual</div>'
+      + '<table width="100%" cellpadding="0" cellspacing="0" style="background:#1c2230;border:1px solid #252d40;border-radius:8px;"><tr><td style="padding:14px 16px;">'
+      + corpoIA
+      + '</td></tr></table></td></tr>';
+  }
 
   var fmt      = function(d){ return Utilities.formatDate(d, 'GMT-3', 'dd/MM/yyyy'); };
   var fmtHora  = function(d){ return Utilities.formatDate(d, 'GMT-3', 'HH:mm'); };
@@ -3452,6 +3734,9 @@ function _rdGerarHtml(rel) {
     + '</td>'
 
     + '</tr></table></td></tr>'
+
+    // ── ANÁLISE DE IA (opcional) ──
+    + htmlAnaliseIA
 
     // FOOTER
     + '<tr><td style="background:#0d1117;padding:14px 28px;border-radius:0 0 12px 12px;border-top:1px solid #1c2230;text-align:center;">'
@@ -3808,6 +4093,8 @@ function removerRegistroPorAbertoId(idAlvo) {
     const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
     const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
     const abaAb = garantirAbaAbertos(ss);
+    if (abaRe) removerFiltroSeExistir(abaRe);
+    if (abaAb) removerFiltroSeExistir(abaAb);
     let removidosRe = 0;
     let removidosAb = 0;
     // Bug fix: ao remover FECHAMENTOs, o Saldo_Parcial daquela chave (série+item+operação)

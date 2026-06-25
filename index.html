@@ -257,7 +257,7 @@ label:first-child{margin-top:0}
       <div class="section-block" id="blocoFechLoteSeries" style="margin-top:14px">
         <div class="divider"></div>
         <div class="section-title">Séries deste lote</div>
-        <div class="info-box" style="font-size:11px">Todas vêm pré-selecionadas. Desmarque as que ainda não terminaram — elas continuam abertas para fechar depois.</div>
+        <div class="info-box" style="font-size:13px;font-weight:700;background:#fff3cd;color:#856404;padding:10px 12px;border-radius:8px;border:1px solid #ffe69c;">⚠️ Todas as séries abaixo JÁ ESTÃO selecionadas (verde) para fechar agora. Só toque numa série se quiser DESMARCAR ela (ela continua aberta pra depois). Não precisa tocar em nada para fechar o lote completo.</div>
         <div id="fechLoteSeriesGrid" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
         <div id="fechLoteSelCount" style="margin-top:8px;font-size:12px;color:var(--green);font-weight:600;text-align:center"></div>
       </div>
@@ -1296,6 +1296,21 @@ function validarFormulario() {
     // Fechamento parcial de lote: exige ao menos uma série marcada para fechar agora
     if (Array.isArray(info.loteSeries) && info.loteSeries.length > 0 && state.fechLoteSeries.length === 0) {
       showToast('Selecione ao menos uma série para fechar','error'); return false;
+    }
+    // Rede de segurança: todas as séries vêm pré-selecionadas (fechar o lote completo é o
+    // caminho padrão); se o operador desmarcou alguma — de propósito ou clicando sem querer
+    // nos chips, achando que precisa "marcar" em vez de "desmarcar" — confirma antes de
+    // prosseguir, já que isso deixa séries presas em aberto sem o operador perceber.
+    if (Array.isArray(info.loteSeries) && info.loteSeries.length > 0 &&
+        state.fechLoteSeries.length < info.loteSeries.length) {
+      const restantes = info.loteSeries.length - state.fechLoteSeries.length;
+      const confirmou = confirm(
+        '⚠️ Você está fechando '+state.fechLoteSeries.length+' de '+info.loteSeries.length+' série(s) deste lote.\n\n'+
+        'As outras '+restantes+' série(s) vão CONTINUAR ABERTAS para fechar depois.\n\n'+
+        'Se você queria fechar TODAS as séries de uma vez, cancele e toque nos chips desmarcados para selecioná-las de novo.\n\n'+
+        'Confirma o fechamento parcial?'
+      );
+      if (!confirmou) return false;
     }
     const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix
     if (opRequerQtd(codOp) || info.qtdPlanejada) {
