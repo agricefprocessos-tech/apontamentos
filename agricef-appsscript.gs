@@ -818,6 +818,35 @@ function gravarApontamento(payload) {
           }
           // Valida série apenas para FECHAMENTO (TERMINO_PARADA/RETRABALHO não têm série)
           if (tipo === 'FECHAMENTO') {
+            // Fechamento precisa corresponder à MESMA atividade que foi aberta — não só à
+            // mesma série. Sem isso, é possível "fechar" uma abertura usando operação/item
+            // diferentes (caso real encontrado: operador abriu "TESTES" e, horas depois,
+            // fechou como "MONTAR MECÂNICA/HIDRÁULICA" na mesma série — provavelmente o app
+            // não reconheceu a abertura pendente e caiu no formulário manual, onde esses
+            // campos ficam livres). Isso corrompe o histórico silenciosamente.
+            const opAbertoLabel = String(dadosAbertos[i][COL_AB.OPERACAO] || '').trim();
+            const opAbertoCod   = opAbertoLabel.substring(0, 4);
+            const opFechamentoCod = String(payload.operacao || '').substring(0, 4);
+            if (opFechamentoCod && opAbertoCod && opFechamentoCod !== opAbertoCod) {
+              return jsonResponse({
+                success: false,
+                message: 'Operação incompatível. A abertura foi feita para "' + opAbertoLabel +
+                         '" mas o fechamento informou operação "' + opFechamentoCod + '".',
+                incompativel: true,
+                tipoAberto: tipoAberto,
+              });
+            }
+            const itemAberto      = String(dadosAbertos[i][COL_AB.COD_ITEM] || '').trim();
+            const itemFechamento  = String(payload.codItem || '').trim();
+            if (itemFechamento && itemAberto && itemFechamento !== itemAberto) {
+              return jsonResponse({
+                success: false,
+                message: 'Código do item incompatível. A abertura foi feita para "' + itemAberto +
+                         '" mas o fechamento informou "' + itemFechamento + '".',
+                incompativel: true,
+                tipoAberto: tipoAberto,
+              });
+            }
             const serieAberto      = String(dadosAbertos[i][7]  || '').trim();
             const loteAbertoRaw    = String(dadosAbertos[i][11] || '').trim();
             const serieFechamento  = String(payload.nrSerie || '').trim();
