@@ -102,6 +102,7 @@ function doGet(e) {
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction();
+  if (action === 'verificarFechamentoRegistrado') return verificarFechamentoRegistradoAction(e.parameter.abertoId, e.parameter.tipo);
   if (action === 'getCadastros')     return getCadastros();
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
@@ -607,7 +608,10 @@ function gravarApontamento(payload) {
   try {
     lock.waitLock(20000);
   } catch (lockErr) {
-    return jsonResponse({ success: false, message: 'Servidor ocupado. Tente novamente em instantes.' });
+    // transiente:true — sinaliza ao frontend que é um erro recuperável (servidor ocupado,
+    // não um problema com os dados), para que ele entre na fila de reenvio automático em
+    // vez de só mostrar um erro e depender do operador notar e tentar de novo manualmente.
+    return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
   }
   try {
     const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -1880,6 +1884,36 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
   }
   if (saldo !== null && saldo > 0) {
     abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId]);
+  }
+}
+
+// ================================================================
+// CONFIRMAÇÃO DE FECHAMENTO JÁ REGISTRADO — usado pela fila offline do frontend antes de
+// descartar um item por "semAberto" (servidor não achou a abertura correspondente). Esse
+// erro acontece tanto quando o fechamento JÁ foi aplicado numa tentativa anterior (a resposta
+// que não chegou ao cliente — descartar é seguro) quanto em erros genuínos (abertura nunca
+// existiu, foi removida por outro motivo — descartar SEM checar perderia o apontamento
+// silenciosamente). Esta action permite o frontend diferenciar os dois casos checando se há
+// de fato uma linha do tipo esperado gravada para aquele abertoId, antes de remover da fila.
+function verificarFechamentoRegistradoAction(abertoId, tipo) {
+  try {
+    const idAlvo = String(abertoId || '').trim();
+    const tipoFormatado = TIPOS_APONTAMENTO[tipo] || tipo;
+    if (!idAlvo || !tipoFormatado) return jsonResponse({ registrado: false });
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_RESPOSTAS);
+    if (!aba) return jsonResponse({ registrado: false });
+    const dados = aba.getDataRange().getValues();
+    for (let i = 1; i < dados.length; i++) {
+      if (String(dados[i][COL_RE.ABERTO_ID] || '').trim() !== idAlvo) continue;
+      if (String(dados[i][COL_RE.TIPO] || '').trim() !== tipoFormatado) continue;
+      return jsonResponse({ registrado: true });
+    }
+    return jsonResponse({ registrado: false });
+  } catch (err) {
+    // Erro ao verificar: NÃO assume nem sucesso nem falha — frontend trata como "incerto"
+    // e mantém na fila para tentar de novo, em vez de arriscar descartar um apontamento real.
+    return jsonResponse({ registrado: null, erro: err.message });
   }
 }
 

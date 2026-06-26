@@ -1366,6 +1366,19 @@ async function enviarApontamento() {
       showToast('Tipo incompatível: ' + data.message, 'error');
       btn.disabled=false; btn.textContent='Registrar apontamento';
       voltarStep1();
+    } else if (data.transiente) {
+      // Erro recuperável do servidor (ex: lock ocupado por outro apontamento concorrente) —
+      // NÃO é problema com os dados digitados. Tratamento idêntico à falha de rede: nunca
+      // deixar essa resposta só como um toast que depende do operador notar e reenviar
+      // manualmente — isso é o que causava fechamentos "perdidos" quando vários operadores
+      // enviavam ao mesmo tempo (ex: fim de turno) e o lock global do backend excedia o tempo.
+      salvarOffline(payload);
+      setLoading(false);
+      btn.disabled=false; btn.textContent='Registrar apontamento';
+      mostrarSucesso(payload, true);
+      setTimeout(() => sincronizarFila(), 5000); // lock tende a liberar rápido — retry mais ágil que o de falha de rede
+      setTimeout(() => showToast('⚠ Servidor ocupado — apontamento salvo e será reenviado automaticamente em instantes','error',8000), 400);
+      return;
     } else {
       showToast('Erro: '+data.message,'error');
       btn.disabled=false; btn.textContent='Registrar apontamento';
@@ -1561,11 +1574,23 @@ async function _sincronizarFilaImpl(manual){
         if(d.success){
           sincronizados++;
         } else if (d.semAberto && TIPOS_FECHAMENTO_FILA.includes(item.tipoApontamento)) {
-          // Servidor não encontrou abertura correspondente — esse fechamento já foi aplicado
-          // numa tentativa anterior (a confirmação que não chegou ao cliente). Não é uma falha:
-          // descarta da fila silenciosamente para não esgotar tentativas e alarmar o suporte.
-          console.log('AGRICEF: fechamento já aplicado anteriormente, removendo da fila', item);
-          sincronizados++;
+          // Servidor não encontrou abertura correspondente para este fechamento — isso pode
+          // significar duas coisas bem diferentes: (a) já foi aplicado numa tentativa anterior
+          // cuja resposta não chegou ao cliente — seguro descartar; ou (b) um erro genuíno
+          // (abertura nunca existiu/foi removida por outro motivo) — descartar sem checar
+          // PERDERIA o apontamento silenciosamente, exatamente o tipo de problema relatado.
+          // Por isso confirma no servidor se a linha de fechamento de fato existe antes de
+          // decidir — nunca assume.
+          const confirmacao = await verificarFechamentoRegistrado(item.abertoId, item.tipoApontamento);
+          if (confirmacao === true) {
+            console.log('AGRICEF: fechamento já aplicado anteriormente (confirmado no servidor), removendo da fila', item);
+            sincronizados++;
+          } else {
+            // confirmacao === false (genuinamente não registrado) ou null (erro ao verificar,
+            // incerto) — em ambos os casos mantém na fila para não arriscar perda de dado real.
+            console.warn('AGRICEF: fechamento sem abertura correspondente E não confirmado como já registrado — mantendo na fila', item, 'confirmacao:', confirmacao);
+            nova.push({...item, _tentativas: tentativas});
+          }
         } else {
           nova.push({...item, _tentativas: tentativas});
         }
@@ -1577,6 +1602,23 @@ async function _sincronizarFilaImpl(manual){
     atualizarBadgeFila();
     if(sincronizados > 0) showToast(sincronizados+' apontamento(s) sincronizado(s) com sucesso ✓','success');
     else if(manual && nova.length > 0) showToast('Servidor indisponível — apontamentos mantidos na fila','error');
+  }
+}
+
+// Retorna true (confirmado registrado), false (confirmado NÃO registrado) ou null (não foi
+// possível confirmar — trata como incerto, nunca como "pode descartar").
+async function verificarFechamentoRegistrado(abertoId, tipo) {
+  if (!abertoId || !tipo) return false;
+  try {
+    const url = API+'?action=verificarFechamentoRegistrado'
+      +'&abertoId='+encodeURIComponent(abertoId)
+      +'&tipo='+encodeURIComponent(tipo);
+    const data = await (await fetch(url)).json();
+    if (data.registrado === true) return true;
+    if (data.registrado === false) return false;
+    return null; // erro no servidor ao verificar — incerto
+  } catch {
+    return null; // falha de rede ao verificar — incerto
   }
 }
 
