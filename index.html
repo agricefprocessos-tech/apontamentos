@@ -257,7 +257,7 @@ label:first-child{margin-top:0}
       <div class="section-block" id="blocoFechLoteSeries" style="margin-top:14px">
         <div class="divider"></div>
         <div class="section-title">Séries deste lote</div>
-        <div class="info-box" style="font-size:13px;font-weight:700;background:#fff3cd;color:#856404;padding:10px 12px;border-radius:8px;border:1px solid #ffe69c;">⚠️ Todas as séries abaixo JÁ ESTÃO selecionadas (verde) para fechar agora. Só toque numa série se quiser DESMARCAR ela (ela continua aberta pra depois). Não precisa tocar em nada para fechar o lote completo.</div>
+        <div class="info-box" style="font-size:13px;font-weight:700;background:#fff3cd;color:#856404;padding:10px 12px;border-radius:8px;border:1px solid #ffe69c;">⚠️ Informe quanto foi produzido de CADA série. Já vem preenchido com a quantidade planejada (assume que terminou tudo) — ajuste para baixo as séries que ainda não terminaram. O que faltar fica como saldo pendente, pronto pra continuar depois.</div>
         <div id="fechLoteSeriesGrid" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
         <div id="fechLoteSelCount" style="margin-top:8px;font-size:12px;color:var(--green);font-weight:600;text-align:center"></div>
       </div>
@@ -271,7 +271,7 @@ label:first-child{margin-top:0}
             <div class="field-readonly" id="fechQtdPlanejadaLabel">—</div>
           </div>
           <div>
-            <div class="qtd-label">Qtd realizada * <span style="font-size:10px;font-weight:400;color:var(--text2)">(0 se nenhuma)</span></div>
+            <div class="qtd-label" id="fechQuantidadeLabel">Qtd realizada * <span style="font-size:10px;font-weight:400;color:var(--text2)">(0 se nenhuma)</span></div>
             <input type="number" id="fechQuantidade" placeholder="0" min="0" step="1" inputmode="numeric" oninput="calcularSaldo()">
           </div>
         </div>
@@ -348,10 +348,8 @@ label:first-child{margin-top:0}
     <!-- BLOCO LOTE -->
     <div class="card section-block" id="blocoLote">
       <div class="section-title">Apontamento em lote</div>
+      <div id="blocoLotesPendentes" style="display:none;margin-bottom:10px"></div>
       <div class="info-box">Toque nas séries produzidas. Um registro será criado para cada uma.</div>
-      <div class="info-box" style="margin-top:6px;border-color:rgba(243,156,18,.3);color:var(--amber);font-size:11px">
-        ℹ Se alguma série possui saldo de baixa parcial anterior, informe a quantidade planejada considerando apenas as peças restantes.
-      </div>
       <div id="loteSeriesGrid" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px"></div>
       <div id="loteSelCount" style="margin-top:8px;font-size:12px;color:var(--green);font-weight:600;text-align:center"></div>
     </div>
@@ -522,14 +520,6 @@ async function init() {
     const s = state.series[idx];
     if (!s) return;
     toggleLoteSerie(s.nrSerie, s.implemento, s.cliente);
-  });
-  // Mesmo padrão para o grid de seleção de séries no FECHAMENTO de um lote em aberto
-  document.getElementById('fechLoteSeriesGrid').addEventListener('click', function(e) {
-    const chip = e.target.closest('.lote-serie-chip');
-    if (!chip) return;
-    const idx = parseInt(chip.dataset.idx);
-    if (isNaN(idx)) return;
-    toggleFechLoteSerie(idx);
   });
   await carregarCadastros();
   // Tenta sincronizar apontamentos pendentes da sessão anterior
@@ -894,7 +884,7 @@ function selecionarTipo(tipo) {
   if (tipo==='ABERTURA') {
     mostrar('blocoProducao');
     esconder('alertaSaldoParcial');
-    if (state.modoLote) { mostrar('blocoLote'); renderLoteSeriesGrid(); }
+    if (state.modoLote) { mostrar('blocoLote'); renderLoteSeriesGrid(); verificarLotesPendentes(); }
   }
   else if (tipo==='FECHAMENTO')         { mostrar('blocoFechamentoInteligente'); preencherFechamentoSeAberto(); }
   else if (tipo.includes('RETRABALHO')) {
@@ -949,16 +939,32 @@ function preencherFechamentoSeAberto() {
   document.getElementById('fechCarimboLabel').textContent  = formatarCarimbo(info.carimbo);
 
   if (temLoteSeries) {
-    // Fechamento parcial de lote: pré-seleciona TODAS as séries (fechar tudo é o caminho padrão,
-    // de um toque) — o operador desmarca manualmente as que ainda não terminaram.
-    state.fechLoteSeries = info.loteSeries.map(s => ({nrSerie: s.nrSerie, implemento: s.implemento, cliente: s.cliente}));
+    // Cada série do lote SEMPRE aparece, com um campo de quantidade próprio — pré-preenchido
+    // com a qtdPlanejada dela (assume produção completa por padrão; o operador ajusta para
+    // baixo as séries que não terminaram). Isso substitui o antigo modelo de "marcar/desmarcar
+    // série inteira": agora qualquer série pode fechar com qtd parcial, e o saldo (planejado -
+    // realizado) é calculado por série, igual ao fluxo de série única.
+    state.fechLoteSeries = info.loteSeries.map(s => ({
+      nrSerie: s.nrSerie, implemento: s.implemento, cliente: s.cliente,
+      qtdPlanejada: Number(s.qtdPlanejada) || 0,
+      qtdRealizada: Number(s.qtdPlanejada) || 0,
+    }));
     mostrar('blocoFechLoteSeries');
     renderFechLoteSeriesGrid();
-    atualizarQtdPlanejadaFechLote();
+    // "Qtd realizada" do bloco abaixo passa a ser só leitura — é a soma automática dos campos
+    // por série acima, não algo que o operador digita diretamente em modo lote.
+    const qtdEl = document.getElementById('fechQuantidade');
+    if (qtdEl) { qtdEl.readOnly = true; qtdEl.style.opacity = '0.6'; qtdEl.style.cursor = 'not-allowed'; }
+    const lbl = document.getElementById('fechQuantidadeLabel');
+    if (lbl) lbl.innerHTML = 'Qtd realizada total <span style="font-size:10px;font-weight:400;color:var(--text2)">(soma automática das séries acima)</span>';
   } else {
     esconder('blocoFechLoteSeries');
     state.fechLoteSeries = [];
     document.getElementById('fechQtdPlanejadaLabel').textContent = info.qtdPlanejada || '—';
+    const qtdEl = document.getElementById('fechQuantidade');
+    if (qtdEl) { qtdEl.readOnly = false; qtdEl.style.opacity = ''; qtdEl.style.cursor = ''; }
+    const lbl = document.getElementById('fechQuantidadeLabel');
+    if (lbl) lbl.innerHTML = 'Qtd realizada * <span style="font-size:10px;font-weight:400;color:var(--text2)">(0 se nenhuma)</span>';
   }
 
   const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix
@@ -967,14 +973,23 @@ function preencherFechamentoSeAberto() {
   mostrar('blocoFechamentoInteligente');
 }
 
-// Recalcula a "Qtd planejada" exibida como soma das séries do lote atualmente selecionadas
-// para fechar agora — atualiza ao vivo conforme o operador marca/desmarca séries.
-function atualizarQtdPlanejadaFechLote() {
-  const soma = state.fechLoteSeries.reduce((s, item) => {
-    const original = (state.abertoInfo.loteSeries || []).find(o => o.nrSerie === item.nrSerie);
-    return s + (original && original.qtdPlanejada != null ? Number(original.qtdPlanejada) : 0);
-  }, 0);
-  document.getElementById('fechQtdPlanejadaLabel').textContent = soma || '—';
+// Soma os planejados/realizados de cada série (state.fechLoteSeries) e atualiza os labels de
+// resumo — "Qtd realizada" do bloco de fechamento passa a ser só leitura aqui, calculada a
+// partir dos campos individuais por série, não digitada pelo operador.
+function atualizarFechLoteResumo() {
+  const totalPlanejado = state.fechLoteSeries.reduce((s, item) => s + (Number(item.qtdPlanejada) || 0), 0);
+  const totalRealizado = state.fechLoteSeries.reduce((s, item) => s + (Number(item.qtdRealizada) || 0), 0);
+  document.getElementById('fechQtdPlanejadaLabel').textContent = totalPlanejado || '—';
+  const qtdEl = document.getElementById('fechQuantidade');
+  if (qtdEl) qtdEl.value = totalRealizado;
+  const incompletas = state.fechLoteSeries.filter(item => Number(item.qtdRealizada) < Number(item.qtdPlanejada)).length;
+  const cnt = document.getElementById('fechLoteSelCount');
+  if (cnt) {
+    cnt.textContent = incompletas === 0
+      ? '✓ Lote completo — todas as ' + state.fechLoteSeries.length + ' série(s) produzidas integralmente'
+      : '⚠️ ' + incompletas + ' de ' + state.fechLoteSeries.length + ' série(s) com saldo pendente — continuam abertas até completar';
+    cnt.style.color = incompletas === 0 ? 'var(--green)' : 'var(--amber)';
+  }
   calcularSaldo();
 }
 
@@ -1074,37 +1089,47 @@ function toggleLoteSerie(nrSerie, implemento, cliente) {
   if (idx >= 0) state.loteSeries.splice(idx,1);
   else state.loteSeries.push({nrSerie, implemento, cliente});
   renderLoteSeriesGrid();
+  // Se o operador alterar manualmente a seleção depois de "Reabrir lote", revalida o
+  // travamento da quantidade — o saldo automático só vale para o conjunto exato de séries.
+  verificarSaldoSeCompleto();
 }
 
 // ===================== FECHAMENTO PARCIAL DE LOTE =====================
-// Grid de seleção das séries de um lote ABERTO — usado na tela de fechamento.
-// state.abertoInfo.loteSeries traz as séries originais (com qtdPlanejada já fixada na abertura);
-// state.fechLoteSeries guarda quais delas o operador está fechando AGORA (todas pré-selecionadas).
+// Grid de quantidade por série de um lote ABERTO — usado na tela de fechamento.
+// Toda série do lote sempre aparece (não há mais "marcar/desmarcar série inteira"); cada uma
+// tem seu próprio campo de quantidade realizada, pré-preenchido com o planejado (assume
+// completo por padrão). Série com realizada < planejada fica com saldo pendente (mesma lógica
+// já usada para série única), sem precisar dividir nada manualmente.
 function renderFechLoteSeriesGrid() {
   const grid = document.getElementById('fechLoteSeriesGrid');
   if (!grid) return;
-  const seriesOriginais = (state.abertoInfo && state.abertoInfo.loteSeries) || [];
-  grid.innerHTML = seriesOriginais.map((s, i) => {
-    const sel = state.fechLoteSeries.some(x => x.nrSerie === s.nrSerie);
-    return `<button class="lote-serie-chip${sel?' selected':''}" data-idx="${i}">
-      <span class="chip-nr">${s.nrSerie}</span>
-      <span class="chip-info">${s.implemento}${s.qtdPlanejada?' · '+s.qtdPlanejada+' pç':''}</span>
-    </button>`;
+  grid.innerHTML = state.fechLoteSeries.map((s, i) => {
+    const completo = Number(s.qtdRealizada) >= Number(s.qtdPlanejada) && Number(s.qtdPlanejada) > 0;
+    return `<div class="lote-serie-qtd-card${completo?' completo':''}" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:1px solid ${completo?'rgba(46,204,113,.4)':'rgba(243,156,18,.4)'};background:${completo?'rgba(46,204,113,.08)':'rgba(243,156,18,.08)'};min-width:150px">
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:13px">${s.nrSerie}</div>
+        <div style="font-size:11px;color:var(--text2)">${s.implemento} · planejado ${s.qtdPlanejada}</div>
+      </div>
+      <input type="number" min="0" step="1" inputmode="numeric" value="${s.qtdRealizada}"
+        style="width:60px;text-align:center" data-idx="${i}" oninput="onChangeFechLoteQtd(${i}, this.value)">
+    </div>`;
   }).join('');
-  const cnt = document.getElementById('fechLoteSelCount');
-  if (cnt) cnt.textContent = state.fechLoteSeries.length === seriesOriginais.length
-    ? 'Fechando o lote completo ('+seriesOriginais.length+' série(s))'
-    : state.fechLoteSeries.length+' de '+seriesOriginais.length+' série(s) selecionada(s) — o restante continua aberto';
+  atualizarFechLoteResumo();
 }
-function toggleFechLoteSerie(idx) {
-  const seriesOriginais = (state.abertoInfo && state.abertoInfo.loteSeries) || [];
-  const s = seriesOriginais[idx];
-  if (!s) return;
-  const i = state.fechLoteSeries.findIndex(x => x.nrSerie === s.nrSerie);
-  if (i >= 0) state.fechLoteSeries.splice(i,1);
-  else state.fechLoteSeries.push({nrSerie: s.nrSerie, implemento: s.implemento, cliente: s.cliente});
-  renderFechLoteSeriesGrid();
-  atualizarQtdPlanejadaFechLote();
+function onChangeFechLoteQtd(idx, valor) {
+  const item = state.fechLoteSeries[idx];
+  if (!item) return;
+  item.qtdRealizada = valor === '' ? 0 : Math.max(0, Number(valor) || 0);
+  // Atualiza só a aparência do card tocado (sem reconstruir o grid inteiro — re-renderizar
+  // tudo a cada tecla faria o input perder o foco enquanto o operador digita).
+  const input = document.querySelector('#fechLoteSeriesGrid input[data-idx="'+idx+'"]');
+  const card  = input && input.closest('.lote-serie-qtd-card');
+  if (card) {
+    const completo = item.qtdRealizada >= item.qtdPlanejada && item.qtdPlanejada > 0;
+    card.style.borderColor = completo ? 'rgba(46,204,113,.4)' : 'rgba(243,156,18,.4)';
+    card.style.background  = completo ? 'rgba(46,204,113,.08)' : 'rgba(243,156,18,.08)';
+  }
+  atualizarFechLoteResumo();
 }
 
 // ===================== SALDO PARCIAL =====================
@@ -1114,16 +1139,34 @@ function onCodItemInput() {
   verificarSaldoSeCompleto();
 }
 
-// Verifica saldo apenas quando TODOS os critérios estiverem preenchidos:
-// tipo=ABERTURA + série única (não lote) + operação selecionada + codItem digitado
+// Verifica saldo quando TODOS os critérios estiverem preenchidos:
+// tipo=ABERTURA + série única + operação selecionada + codItem digitado.
+// Em modo lote, não há checagem individual aqui — a quantidade travada vem do atalho
+// "Reabrir lote" (reabrirLotePendente). Esta função só precisa não desfazer esse travamento
+// se o operador, por exemplo, escolher a operação DEPOIS de já ter clicado em "Reabrir lote".
 function verificarSaldoSeCompleto() {
   const codItem = (document.getElementById('codItem').value || '').trim();
   if (state.tipo === 'ABERTURA' && state.nrSerie && !state.modoLote && state.operacao && codItem) {
     verificarSaldoAPI(state.nrSerie, codItem, state.operacao);
+  } else if (state.tipo === 'ABERTURA' && state.modoLote && state.loteSeries.length > 0 && codItem) {
+    if (!loteReaberturaAindaCorresponde(codItem)) liberarQtdPlanejada();
   } else {
     esconder('alertaSaldoParcial');
     liberarQtdPlanejada();
   }
+}
+
+// Confirma se as séries atualmente selecionadas no lote ainda batem exatamente com algum
+// lote pendente conhecido (mesmo codItem, mesmo conjunto de séries) — usado para não liberar
+// o campo de quantidade travado por reabrirLotePendente quando outro evento dispara esta função.
+function loteReaberturaAindaCorresponde(codItem) {
+  const lotes = window._lotesPendentesCache || [];
+  const seriesSelecionadas = new Set(state.loteSeries.map(s => s.nrSerie));
+  return lotes.some(l =>
+    l.codItem === codItem &&
+    l.series.length === seriesSelecionadas.size &&
+    l.series.every(s => seriesSelecionadas.has(s.nrSerie))
+  );
 }
 
 async function verificarSaldoAPI(nrSerie, codItem, operacao) {
@@ -1158,6 +1201,67 @@ async function verificarSaldoAPI(nrSerie, codItem, operacao) {
   }
 }
 
+// ===================== LOTES COM SALDO PENDENTE (reabertura) =====================
+// Ao entrar no modo lote, busca lotes com saldo pendente (de fechamentos parciais anteriores)
+// e oferece um atalho "Reabrir lote" que pré-seleciona as séries e a quantidade — em vez do
+// operador ter que lembrar quais séries faltam e calcular a quantidade restante manualmente.
+async function verificarLotesPendentes() {
+  const box = document.getElementById('blocoLotesPendentes');
+  if (!box) return;
+  try {
+    const r = await fetch(API + '?action=verificarSaldoLotes&_=' + Date.now());
+    const data = await r.json();
+    if (!data.success || !Array.isArray(data.lotes) || data.lotes.length === 0) {
+      box.style.display = 'none'; box.innerHTML = ''; return;
+    }
+    window._lotesPendentesCache = data.lotes;
+    box.innerHTML = data.lotes.map(l => {
+      // Quantidades podem ser desiguais entre séries do mesmo lote (cada uma fecha com sua
+      // própria qtdRealizada) — lista cada série com seu restante específico, sem assumir igual.
+      const detalhe = l.series.map(s => s.nrSerie+' ('+s.qtdRestante+' pç)').join(', ');
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;margin-bottom:6px;border-radius:8px;border:1px solid rgba(243,156,18,.4);background:rgba(243,156,18,.08)">
+        <div style="font-size:12px;line-height:1.4">
+          <strong>📦 Lote com saldo pendente</strong> · item ${l.codItem}<br>
+          ${detalhe}
+        </div>
+        <button type="button" class="btn-secondary" style="padding:6px 10px;font-size:12px;white-space:nowrap;flex-shrink:0" onclick="reabrirLotePendente('${l.abertoId}')">Reabrir lote →</button>
+      </div>`;
+    }).join('');
+    box.style.display = 'block';
+  } catch {
+    box.style.display = 'none';
+  }
+}
+
+function reabrirLotePendente(abertoId) {
+  const lote = (window._lotesPendentesCache || []).find(l => l.abertoId === abertoId);
+  if (!lote) return;
+  lote.series.forEach(s => {
+    const jaSelecionada = state.loteSeries.some(x => x.nrSerie === s.nrSerie);
+    if (!jaSelecionada) {
+      const cad = (state.series || []).find(x => x.nrSerie === s.nrSerie);
+      toggleLoteSerie(s.nrSerie, cad ? cad.implemento : '', cad ? cad.cliente : '');
+    }
+    // Quantidade planejada por série (o saldo restante DELA, que pode ser diferente entre
+    // séries do mesmo lote) — sem isso, o backend dividiria o total igualmente entre todas.
+    const item = state.loteSeries.find(x => x.nrSerie === s.nrSerie);
+    if (item) item.qtdPlanejada = Number(s.qtdRestante) || 0;
+  });
+  renderLoteSeriesGrid();
+  document.getElementById('codItem').value = lote.codItem;
+  const qtdTotal = lote.series.reduce((sum, s) => sum + (Number(s.qtdRestante) || 0), 0);
+  mostrar('campoQtdAbertura');
+  const qtdEl = document.getElementById('qtdPlanejada');
+  if (qtdEl) {
+    qtdEl.value         = qtdTotal;
+    qtdEl.readOnly      = true;
+    qtdEl.style.opacity = '0.6';
+    qtdEl.style.cursor  = 'not-allowed';
+    qtdEl.title         = 'Quantidade bloqueada — saldo de baixa parcial anterior do lote';
+  }
+  showToast('Lote reaberto — séries e quantidade preenchidas automaticamente', 'success');
+}
+
 // Libera o campo qtdPlanejada (usado ao limpar ou quando não há saldo)
 function liberarQtdPlanejada() {
   const qtdEl = document.getElementById('qtdPlanejada');
@@ -1190,9 +1294,10 @@ async function enviarApontamento() {
     const info = state.abertoInfo;
     const qtdEl = document.getElementById('fechQuantidade');
     const qtdVal = qtdEl ? qtdEl.value : '';
-    // Fechamento parcial de lote: usa state.fechLoteSeries (subconjunto selecionado pelo
-    // operador na tela de fechamento) — NUNCA state.loteSeries, que é exclusivo da abertura
-    // de um lote NOVO e pode estar populado de uma ação anterior sem relação com este fechamento.
+    // Fechamento de lote: usa state.fechLoteSeries — SEMPRE contém todas as séries do lote
+    // original, cada uma já com sua qtdRealizada (preenchida pelo operador por série na tela
+    // de fechamento). NUNCA state.loteSeries, que é exclusivo da abertura de um lote NOVO e
+    // pode estar populado de uma ação anterior sem relação com este fechamento.
     const ehFechLote = Array.isArray(info.loteSeries) && info.loteSeries.length > 0;
     payload = {
       timestamp: ts, hora,
@@ -1293,24 +1398,22 @@ function validarFormulario() {
 
   if (ehFechamentoInteligente || state.modoFechamentoRapido) {
     const info = state.abertoInfo;
-    // Fechamento parcial de lote: exige ao menos uma série marcada para fechar agora
-    if (Array.isArray(info.loteSeries) && info.loteSeries.length > 0 && state.fechLoteSeries.length === 0) {
-      showToast('Selecione ao menos uma série para fechar','error'); return false;
-    }
-    // Rede de segurança: todas as séries vêm pré-selecionadas (fechar o lote completo é o
-    // caminho padrão); se o operador desmarcou alguma — de propósito ou clicando sem querer
-    // nos chips, achando que precisa "marcar" em vez de "desmarcar" — confirma antes de
-    // prosseguir, já que isso deixa séries presas em aberto sem o operador perceber.
-    if (Array.isArray(info.loteSeries) && info.loteSeries.length > 0 &&
-        state.fechLoteSeries.length < info.loteSeries.length) {
-      const restantes = info.loteSeries.length - state.fechLoteSeries.length;
-      const confirmou = confirm(
-        '⚠️ Você está fechando '+state.fechLoteSeries.length+' de '+info.loteSeries.length+' série(s) deste lote.\n\n'+
-        'As outras '+restantes+' série(s) vão CONTINUAR ABERTAS para fechar depois.\n\n'+
-        'Se você queria fechar TODAS as séries de uma vez, cancele e toque nos chips desmarcados para selecioná-las de novo.\n\n'+
-        'Confirma o fechamento parcial?'
-      );
-      if (!confirmou) return false;
+    // Fechamento de lote: cada série tem sua própria qtdRealizada (sempre todas presentes em
+    // state.fechLoteSeries — não há mais "selecionar/desmarcar série inteira"). Se alguma
+    // série ficou com realizada < planejada, confirma antes de prosseguir — ela vai gerar
+    // saldo pendente, em vez de fechar integralmente.
+    if (Array.isArray(info.loteSeries) && info.loteSeries.length > 0) {
+      const incompletas = state.fechLoteSeries.filter(s => Number(s.qtdRealizada) < Number(s.qtdPlanejada));
+      if (incompletas.length > 0) {
+        const lista = incompletas.map(s => s.nrSerie+' ('+s.qtdRealizada+'/'+s.qtdPlanejada+')').join(', ');
+        const confirmou = confirm(
+          '⚠️ '+incompletas.length+' de '+info.loteSeries.length+' série(s) deste lote ficarão com saldo pendente:\n\n'+
+          lista+'\n\n'+
+          'O que faltar continua pendente para fechar depois (reabrindo a série). Se você queria fechar tudo completo, cancele e ajuste as quantidades.\n\n'+
+          'Confirma o fechamento parcial?'
+        );
+        if (!confirmou) return false;
+      }
     }
     const codOp = String(info.operacao||'').substring(0,4);  // Bug#24 fix
     if (opRequerQtd(codOp) || info.qtdPlanejada) {

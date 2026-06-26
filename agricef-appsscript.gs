@@ -101,6 +101,7 @@ function doGet(e) {
 
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
+  if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction();
   if (action === 'getCadastros')     return getCadastros();
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
@@ -668,6 +669,12 @@ function gravarApontamento(payload) {
     // na abertura) do registro que está sendo fechado. Preenchido na validação abaixo e
     // reaproveitado tanto na gravação por série quanto no saldo parcial.
     let loteSeriesFechamento = null;
+    // Mapa nrSerie → {qtdPlanejada, qtdRealizada} efetivamente gravados nesta chamada (preenchido
+    // junto com a gravação das linhas de FECHAMENTO de lote). Usado no saldo parcial para não
+    // aplicar os totais do payload (que somam todas as séries) em cada série individualmente —
+    // bug pré-existente: sem isso, o saldo de cada série era calculado com qtdPl/qtdRe do LOTE
+    // INTEIRO, não da série específica.
+    let loteQtdPorSerieMap = null;
 
     // ---------------------------------------------------------------
     // VALIDAÇÃO SERVER-SIDE — executada ANTES de qualquer escrita,
@@ -1001,9 +1008,27 @@ function gravarApontamento(payload) {
         const resto = total - base * n;
         return Array.from({ length: n }, (_, i) => base + (i < resto ? 1 : 0));
       };
-      // Quantidade realizada: sempre dividida entre as séries sendo gravadas AGORA
-      // (no fechamento parcial, é só entre as séries fechadas nesta chamada).
-      const qtdRePorSerieArr = distribuirQtd(qtdReTotal, numSeries);
+      // Quantidade realizada por série:
+      // • Se o payload já vem com qtdRealizada explícita em CADA item de loteSeries (novo
+      //   fluxo: operador informa quanto produziu de cada série individualmente, inclusive
+      //   0 para as que não avançaram), usa esses valores diretamente — sem dividir nada.
+      // • Senão (chamadas antigas, ou ABERTURA onde esse campo não existe), mantém o
+      //   comportamento legado de dividir o total igualmente entre as séries.
+      const temQtdRealizadaPorSerie = !tiposAbertura.includes(tipo) &&
+        payload.loteSeries.every(item => item.qtdRealizada !== undefined && item.qtdRealizada !== null && item.qtdRealizada !== '');
+      let qtdRePorSerieArr;
+      if (temQtdRealizadaPorSerie) {
+        const QTD_MAX_LOTE = 99999;
+        for (const item of payload.loteSeries) {
+          const v = Number(item.qtdRealizada);
+          if (isNaN(v)) return jsonResponse({ success: false, message: 'Quantidade inválida na série ' + item.nrSerie + ': "' + item.qtdRealizada + '"' });
+          if (v < 0) return jsonResponse({ success: false, message: 'Quantidade realizada não pode ser negativa (série ' + item.nrSerie + ')' });
+          if (v > QTD_MAX_LOTE) return jsonResponse({ success: false, message: 'Quantidade realizada acima do limite máximo permitido (série ' + item.nrSerie + ')' });
+        }
+        qtdRePorSerieArr = payload.loteSeries.map(item => Number(item.qtdRealizada));
+      } else {
+        qtdRePorSerieArr = distribuirQtd(qtdReTotal, numSeries);
+      }
 
       // Quantidade planejada por série:
       // • ABERTURA — divide o total do lote agora e FIXA esse valor por série (persistido
@@ -1014,13 +1039,30 @@ function gravarApontamento(payload) {
       //   fechamento parcial distorceria o planejado das séries que ainda ficam abertas.
       let qtdPlPorSerieArr;
       if (tiposAbertura.includes(tipo)) {
-        const qtdPlTotal = Number(payload.qtdPlanejada || 0);
-        qtdPlPorSerieArr = distribuirQtd(qtdPlTotal, numSeries);
+        // Reabertura de lote com saldo pendente: cada série já vem com sua própria
+        // qtdPlanejada (o saldo restante dela, que pode ser diferente entre séries do mesmo
+        // lote — ex: uma ficou com 1 e outra com 2). Sem isso, dividiríamos o total igualmente
+        // e perderíamos a quantidade individual correta de cada série.
+        const temQtdPlanejadaPorSerie = payload.loteSeries.every(item => item.qtdPlanejada !== undefined && item.qtdPlanejada !== null && item.qtdPlanejada !== '');
+        if (temQtdPlanejadaPorSerie) {
+          qtdPlPorSerieArr = payload.loteSeries.map(item => Number(item.qtdPlanejada) || 0);
+        } else {
+          const qtdPlTotal = Number(payload.qtdPlanejada || 0);
+          qtdPlPorSerieArr = distribuirQtd(qtdPlTotal, numSeries);
+        }
         payload.loteSeries = payload.loteSeries.map((item, idx) => ({ ...item, qtdPlanejada: qtdPlPorSerieArr[idx] }));
       } else {
         qtdPlPorSerieArr = payload.loteSeries.map(item => {
           const original = (loteSeriesFechamento || []).find(s => String(s.nrSerie).trim() === String(item.nrSerie).trim());
           return original && original.qtdPlanejada != null ? Number(original.qtdPlanejada) : 0;
+        });
+        // Guarda o valor efetivo por série para o saldo parcial usar abaixo, em vez dos totais do payload.
+        loteQtdPorSerieMap = {};
+        payload.loteSeries.forEach((item, idx) => {
+          loteQtdPorSerieMap[String(item.nrSerie).trim()] = {
+            qtdPlanejada: qtdPlPorSerieArr[idx],
+            qtdRealizada: qtdRePorSerieArr[idx],
+          };
         });
       }
 
@@ -1092,24 +1134,33 @@ function gravarApontamento(payload) {
       const opCod      = String(payload.operacao || '').substring(0, 4);
       const codItemKey = String(payload.codItem || '').trim();
 
+      const abertoIdPayload = String(payload.abertoId || '').trim();
+
       if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
-        // LOTE: atualiza saldo de cada série individualmente
+        // LOTE: atualiza saldo de cada série individualmente, usando o qtdPlanejada/qtdRealizada
+        // EFETIVO daquela série (loteQtdPorSerieMap) — nunca os totais do payload, que somam
+        // todas as séries do lote e produziriam saldo incorreto se houver mais de uma série.
         for (const item of loteSeriesFechamento) {
+          const nrSerieItem = String(item.nrSerie || '').trim();
+          const efetivo = loteQtdPorSerieMap && loteQtdPorSerieMap[nrSerieItem];
+          const qtdPlItem = efetivo ? efetivo.qtdPlanejada : qtdPl;
+          const qtdReItem = efetivo ? efetivo.qtdRealizada : qtdRe;
           atualizarSaldoParcial(
             abaSaldo,
-            String(item.nrSerie || '').trim(),
+            nrSerieItem,
             codItemKey,
             opCod,
-            qtdPl,
-            qtdRe,
-            carimbo
+            qtdPlItem,
+            qtdReItem,
+            carimbo,
+            abertoIdPayload
           );
         }
       } else {
         // Série única
         const nrSerieKey = String(payload.nrSerie || '').trim();
         if (nrSerieKey) {
-          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo);
+          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo, abertoIdPayload);
         }
       }
     }
@@ -1675,7 +1726,7 @@ function garantirAbaSaldo(ss) {
   let aba = ss.getSheetByName(ABA_SALDO);
   if (!aba) {
     aba = ss.insertSheet(ABA_SALDO);
-    const cab = ['NrSerie','CodItem','Operacao','QtdRestante','UltimaAtualizacao'];
+    const cab = ['NrSerie','CodItem','Operacao','QtdRestante','UltimaAtualizacao','AbertoId'];
     aba.appendRow(cab);
     aba.setFrozenRows(1);
     aba.getRange(1,1,1,cab.length).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
@@ -1684,6 +1735,12 @@ function garantirAbaSaldo(ss) {
     aba.getRange('B:B').setNumberFormat('@'); // CodItem
     aba.getRange('C:C').setNumberFormat('@'); // Operacao ← crítico: '0010' vira 10 sem isso
     aba.getRange('E:E').setNumberFormat('@'); // UltimaAtualizacao
+    aba.getRange('F:F').setNumberFormat('@'); // AbertoId — só rastreabilidade, não entra na chave de busca
+  } else if (aba.getLastColumn() < 6) {
+    // Migração leve: planilhas já existentes ganham a coluna sem perder dados
+    aba.getRange(1, 6).setValue('AbertoId');
+    aba.getRange(1, 6).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+    aba.getRange('F:F').setNumberFormat('@');
   }
   return aba;
 }
@@ -1712,7 +1769,10 @@ function garantirAbaAnaliseIA(ss) {
 //   • Há saldo anterior  → novoSaldo = saldoAnterior - qtdRealizada
 //   • Sem saldo anterior → novoSaldo = qtdPlanejada  - qtdRealizada  (primeiro ciclo)
 //   • novoSaldo ≤ 0      → remove o registro (produção concluída)
-function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo) {
+// abertoId (opcional): só rastreabilidade — não faz parte da chave de busca (NrSerie+CodItem+
+// Operacao continua sendo a chave, como sempre foi), grava o abertoId da abertura que gerou
+// este saldo para permitir agrupar saldos pendentes por lote de origem.
+function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo, abertoId) {
   const dados = aba.getDataRange().getValues();
   const codItemNorm = String(codItem || '').trim();
 
@@ -1747,7 +1807,7 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
 
   if (matches.length === 0) {
     if (novoSaldo > 0) {
-      aba.appendRow([nrSerie, codItem, operacao, novoSaldo, carimbo]);
+      aba.appendRow([nrSerie, codItem, operacao, novoSaldo, carimbo, abertoId || '']);
     }
     return;
   }
@@ -1758,6 +1818,7 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
   } else {
     aba.getRange(linha, 3).setValue(operacao);
     aba.getRange(linha, 4).setValue(novoSaldo);
+    aba.getRange(linha, 6).setValue(abertoId || dados[matches[0]][5] || ''); // mantém o anterior se não vier um novo
     aba.getRange(linha, 5).setValue(carimbo);
   }
 }
@@ -1798,14 +1859,17 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
       qtdPlanejada: Number(dadosRe[i][COL_RE.QTD_PLANEJADA]) || 0,
       qtdRealizada: Number(dadosRe[i][COL_RE.QTD]) || 0,
       carimbo: dadosRe[i][COL_RE.CARIMBO],
+      abertoId: String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim(),
     });
   }
 
   let saldo = null;
   let ultimoCarimbo = '';
+  let ultimoAbertoId = '';
   eventos.forEach(ev => {
     saldo = (saldo === null) ? Math.max(0, ev.qtdPlanejada - ev.qtdRealizada) : Math.max(0, saldo - ev.qtdRealizada);
     ultimoCarimbo = ev.carimbo;
+    ultimoAbertoId = ev.abertoId;
   });
 
   const dadosSaldo = abaSaldo.getDataRange().getValues();
@@ -1815,7 +1879,7 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
     }
   }
   if (saldo !== null && saldo > 0) {
-    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo]);
+    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId]);
   }
 }
 
@@ -1835,13 +1899,56 @@ function verificarSaldoParcialAction(nrSerie, codItem, operacao) {
       ) {
         const qtd = Number(dados[i][3]);
         if (qtd > 0) {
-          return jsonResponse({ temSaldo: true, qtdRestante: qtd, ultimaAtualizacao: String(dados[i][4]) });
+          return jsonResponse({
+            temSaldo: true,
+            qtdRestante: qtd,
+            ultimaAtualizacao: String(dados[i][4]),
+            abertoId: String(dados[i][5] || ''),
+          });
         }
       }
     }
     return jsonResponse({ temSaldo: false });
   } catch (err) {
     return jsonResponse({ temSaldo: false, erro: err.message });
+  }
+}
+
+// ================================================================
+// LOTES COM SALDO PENDENTE — agrupa Saldo_Parcial por AbertoId para permitir
+// "reabrir lote para séries restantes" em vez de reabrir série por série.
+// Só agrupa linhas que têm AbertoId preenchido (saldos antigos, gravados antes
+// desta coluna existir, continuam funcionando no fluxo de série única — não aparecem
+// aqui, mas também não quebram nada).
+// ================================================================
+function verificarSaldoLotesAction() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_SALDO);
+    if (!aba) return jsonResponse({ success: true, lotes: [] });
+    const dados = aba.getDataRange().getValues();
+    const porAbertoId = {};
+    for (let i = 1; i < dados.length; i++) {
+      const abertoId = String(dados[i][5] || '').trim();
+      const qtd = Number(dados[i][3]) || 0;
+      if (!abertoId || qtd <= 0) continue;
+      if (!porAbertoId[abertoId]) {
+        porAbertoId[abertoId] = {
+          abertoId: abertoId,
+          codItem: String(dados[i][1] || '').trim(),
+          operacao: String(dados[i][2] || '').trim(),
+          ultimaAtualizacao: String(dados[i][4] || ''),
+          series: [],
+        };
+      }
+      porAbertoId[abertoId].series.push({
+        nrSerie: String(dados[i][0] || '').trim(),
+        qtdRestante: qtd,
+      });
+    }
+    return jsonResponse({ success: true, lotes: Object.values(porAbertoId) });
+  } catch (err) {
+    return jsonResponse({ success: false, erro: err.message, lotes: [] });
   }
 }
 
