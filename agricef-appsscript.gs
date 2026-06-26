@@ -103,6 +103,7 @@ function doGet(e) {
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
   if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction();
   if (action === 'verificarFechamentoRegistrado') return verificarFechamentoRegistradoAction(e.parameter.abertoId, e.parameter.tipo);
+  if (action === 'notificarFalhaPermanente') return notificarFalhaPermanenteAction(e.parameter.item);
   if (action === 'getCadastros')     return getCadastros();
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
@@ -1917,6 +1918,43 @@ function verificarFechamentoRegistradoAction(abertoId, tipo) {
   }
 }
 
+// ================================================================
+// ALERTA DE FALHA PERMANENTE NA FILA OFFLINE — o frontend chama isso quando um apontamento
+// esgota as tentativas de reenvio automático (fila local do operador) e é movido para a fila
+// de falhas permanentes. Sem isso, a única forma de alguém saber que um apontamento real se
+// perdeu seria o operador notar o toast "contate o suporte" no próprio aparelho — fácil de
+// passar desapercebido em ambiente de fábrica. Fire-and-forget: o frontend não bloqueia nem
+// depende da resposta desta action.
+function notificarFalhaPermanenteAction(payloadJson) {
+  try {
+    const item = JSON.parse(payloadJson || '{}');
+    const tipoLabel = TIPOS_APONTAMENTO[item.tipoApontamento] || item.tipoApontamento || '—';
+    const html =
+      '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333">' +
+      '<h3 style="color:#c0392b">⛔ Apontamento não sincronizado — AGRICEF</h3>' +
+      '<p>Um apontamento ficou retido no dispositivo do operador e <strong>não foi registrado na base</strong> ' +
+      'após várias tentativas automáticas de reenvio. O operador provavelmente precisará refazê-lo manualmente, ' +
+      'mas convém confirmar com ele e verificar a conexão do dispositivo usado.</p>' +
+      '<table style="border-collapse:collapse;margin-top:8px">' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Operador</td><td style="padding:4px 10px">' + (item.operadorNome || item.operador || '—') + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Tipo</td><td style="padding:4px 10px">' + tipoLabel + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Série/Implemento</td><td style="padding:4px 10px">' + (item.nrSerie || item.implemento || '—') + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Código do item</td><td style="padding:4px 10px">' + (item.codItem || '—') + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Horário original</td><td style="padding:4px 10px">' + (item.timestamp || item.hora || '—') + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Salvo offline em</td><td style="padding:4px 10px">' + (item._salvoEm || '—') + '</td></tr>' +
+      '</table>' +
+      '</div>';
+    MailApp.sendEmail({
+      to:       EMAIL_ALERTA_FALHA,
+      subject:  '⛔ AGRICEF | Apontamento não sincronizado — ' + (item.operadorNome || item.operador || ''),
+      htmlBody: html,
+    });
+    return jsonResponse({ success: true });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message });
+  }
+}
+
 function verificarSaldoParcialAction(nrSerie, codItem, operacao) {
   try {
     const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -2777,6 +2815,7 @@ function getAnaliseIAAction() {
 // ================================================================
 
 const EMAIL_RELATORIO    = 'guilherme.souza@agricef.com.br,luciano.oliveira@agricef.com.br,cerri@agricef.com.br';
+const EMAIL_ALERTA_FALHA = 'guilherme.souza@agricef.com.br';
 const DIAS_ALERTA_ATRASO = 3; // ordens abertas há mais que isso → alerta vermelho
 
 // ---------------------------------------------------------------

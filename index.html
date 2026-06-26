@@ -1559,11 +1559,16 @@ async function _sincronizarFilaImpl(manual){
       if (tentativas > FILA_MAX_TENTATIVAS) {
         // Após N tentativas sem sucesso: move para fila de falhas permanentes
         const falhas = JSON.parse(localStorage.getItem('agricef_falhas')||'[]');
-        falhas.push({...item, _falhouEm: new Date().toISOString()});
+        const itemFalho = {...item, _falhouEm: new Date().toISOString()};
+        falhas.push(itemFalho);
         localStorage.setItem('agricef_falhas', JSON.stringify(falhas));
         console.error('AGRICEF: apontamento movido para fila de falhas permanentes', item);
         // Badge especial de erro crítico
         showToast('⛔ Apontamento de '+item.hora+' não pôde ser sincronizado após '+FILA_MAX_TENTATIVAS+' tentativas. Contate o suporte.','error',10000);
+        // Avisa por e-mail — sem isso, a única forma de alguém saber que um apontamento real
+        // se perdeu seria o operador notar este toast e relatar manualmente. Fire-and-forget:
+        // não bloqueia o fluxo nem depende da resposta.
+        fetch(API+'?action=notificarFalhaPermanente&item='+encodeURIComponent(JSON.stringify(itemFalho))).catch(()=>{});
         continue;
       }
       try{
