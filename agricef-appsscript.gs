@@ -27,6 +27,7 @@ const ABA_SALDO       = 'Saldo_Parcial';
 const ABA_SERIES      = 'Cadastro_Series';
 const ABA_OPERACOES   = 'Cadastro_Operacoes';
 const ABA_ANALISES_IA = 'Analises_IA';
+const ABA_JUSTIFICATIVAS = 'Justificativas_Auditoria';
 
 // ================================================================
 // SCHEMA DE COLUNAS (0-indexed)
@@ -104,6 +105,9 @@ function doGet(e) {
   if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction();
   if (action === 'verificarFechamentoRegistrado') return verificarFechamentoRegistradoAction(e.parameter.abertoId, e.parameter.tipo);
   if (action === 'notificarFalhaPermanente') return notificarFalhaPermanenteAction(e.parameter.item);
+  if (action === 'getJustificativasAuditoria') return getJustificativasAuditoriaAction();
+  if (action === 'removerJustificativaAuditoria') return removerJustificativaAuditoriaAction(e.parameter.chave, e.parameter.key);
+  if (action === 'desfazerFechamento') return desfazerFechamentoAction(e.parameter.abertoId, e.parameter.key);
   if (action === 'getCadastros')     return getCadastros();
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
@@ -363,6 +367,9 @@ function doGet(e) {
       }
       if (payload.action === 'editarApontamento') {
         return editarApontamento(payload);
+      }
+      if (payload.action === 'salvarJustificativaAuditoria') {
+        return salvarJustificativaAuditoriaAction(payload);
       }
       return gravarApontamento(payload);
     } catch (err) {
@@ -1981,6 +1988,233 @@ function notificarFalhaPermanenteAction(payloadJson) {
     return jsonResponse({ success: true });
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
+  }
+}
+
+// ================================================================
+// JUSTIFICATIVAS DE AUDITORIA — permite ao líder justificar uma inconsistência de "duração
+// suspeita" do painel de Auditoria do dashboard, removendo-a da contagem ativa (mas mantendo
+// rastro: aparece numa seção "Justificadas" separada, nunca apagada silenciosamente).
+// Chave: combinação func+openTs+closeTs (única o suficiente na prática, já que pairRows não
+// expõe o abertoId) — calculada da mesma forma no dashboard e aqui.
+// ================================================================
+function garantirAbaJustificativas(ss) {
+  let aba = ss.getSheetByName(ABA_JUSTIFICATIVAS);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_JUSTIFICATIVAS);
+    const cab = ['Chave', 'Tipo', 'Justificativa', 'Detalhe', 'DataHora'];
+    aba.appendRow(cab);
+    aba.setFrozenRows(1);
+    aba.getRange(1, 1, 1, cab.length).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+    aba.getRange('A:A').setNumberFormat('@'); // Chave
+    aba.getRange('E:E').setNumberFormat('@'); // DataHora
+  }
+  return aba;
+}
+
+function getJustificativasAuditoriaAction() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = garantirAbaJustificativas(ss);
+    const dados = aba.getDataRange().getValues();
+    const justificativas = [];
+    for (let i = 1; i < dados.length; i++) {
+      if (!dados[i][0]) continue;
+      justificativas.push({
+        chave: String(dados[i][0]),
+        tipo: String(dados[i][1] || ''),
+        justificativa: String(dados[i][2] || ''),
+        detalhe: String(dados[i][3] || ''),
+        dataHora: String(dados[i][4] || ''),
+      });
+    }
+    return jsonResponse({ success: true, justificativas: justificativas });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message, justificativas: [] });
+  }
+}
+
+function salvarJustificativaAuditoriaAction(payload) {
+  if (payload.key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  const chave = String(payload.chave || '').trim();
+  const justificativa = String(payload.justificativa || '').trim();
+  if (!chave) return jsonResponse({ success: false, message: 'Chave é obrigatória.' });
+  if (!justificativa) return jsonResponse({ success: false, message: 'Justificativa não pode ser vazia.' });
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+  } catch (lockErr) {
+    return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
+  }
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = garantirAbaJustificativas(ss);
+    const dados = aba.getDataRange().getValues();
+    // Idempotente: se a chave já existe, sobrescreve (permite o líder corrigir o texto depois)
+    let linhaExistente = -1;
+    for (let i = 1; i < dados.length; i++) {
+      if (String(dados[i][0]).trim() === chave) { linhaExistente = i + 1; break; }
+    }
+    const carimbo = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    const linha = [chave, String(payload.tipo || ''), justificativa, String(payload.detalhe || ''), carimbo];
+    if (linhaExistente > 0) {
+      aba.getRange(linhaExistente, 1, 1, linha.length).setValues([linha]);
+    } else {
+      aba.appendRow(linha);
+    }
+    return jsonResponse({ success: true });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Permite desfazer uma justificativa (ex: líder digitou errado, ou quer que o item volte a
+// contar como inconsistência ativa). Não exposta na UI ainda — uso administrativo via URL.
+function removerJustificativaAuditoriaAction(chave, key) {
+  if (key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  const chaveAlvo = String(chave || '').trim();
+  if (!chaveAlvo) return jsonResponse({ success: false, message: 'Chave é obrigatória.' });
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = garantirAbaJustificativas(ss);
+    const dados = aba.getDataRange().getValues();
+    for (let i = dados.length - 1; i >= 1; i--) {
+      if (String(dados[i][0]).trim() === chaveAlvo) {
+        aba.deleteRow(i + 1);
+        return jsonResponse({ success: true, removido: true });
+      }
+    }
+    return jsonResponse({ success: true, removido: false });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message });
+  }
+}
+
+// ================================================================
+// DESFAZER FECHAMENTO — remove a(s) linha(s) de FECHAMENTO indevidas (engano do líder/operador)
+// e recria a entrada na aba Abertos a partir da linha de ABERTURA original (mesmo abertoId),
+// como se o fechamento nunca tivesse acontecido. A linha de ABERTURA no histórico nunca é
+// tocada — só o FECHAMENTO é removido e o operador volta a aparecer como "em aberto".
+// Lote: remove TODAS as linhas de FECHAMENTO daquele abertoId e restaura TODAS as séries
+// originais como pendentes (não tenta reconstruir um fechamento parcial anterior — se o lote
+// já tinha sido fechado em partes antes deste fechamento, isso precisa ser resolvido manual).
+// ================================================================
+function desfazerFechamentoAction(abertoId, key) {
+  if (key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  const idAlvo = String(abertoId || '').trim();
+  if (!idAlvo) return jsonResponse({ success: false, message: 'abertoId é obrigatório.' });
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+  } catch (lockErr) {
+    return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
+  }
+  try {
+    const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+    const abaAb = garantirAbaAbertos(ss);
+    if (!abaRe) return jsonResponse({ success: false, message: 'Aba de respostas não encontrada.' });
+
+    const dadosRe = abaRe.getDataRange().getValues();
+    const linhasAbertura = [];
+    const linhasFechamentoIdx = [];
+    for (let i = 1; i < dadosRe.length; i++) {
+      if (String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim() !== idAlvo) continue;
+      const tipo = String(dadosRe[i][COL_RE.TIPO] || '').trim();
+      if (tipo === 'ABERTURA') linhasAbertura.push(dadosRe[i]);
+      if (tipo === 'FECHAMENTO') linhasFechamentoIdx.push(i);
+    }
+
+    if (linhasAbertura.length === 0) {
+      return jsonResponse({ success: false, message: 'Nenhuma ABERTURA encontrada para este abertoId — não é possível restaurar.' });
+    }
+    if (linhasFechamentoIdx.length === 0) {
+      return jsonResponse({ success: false, message: 'Nenhum FECHAMENTO encontrado para este abertoId.' });
+    }
+
+    const ehLote = linhasAbertura.length > 1;
+    // COL_RE.OPERADOR guarda "código — nome completo" (ex: "121 — JOÃO..."), não só o código —
+    // precisa extrair o código antes de normalizar, senão a entrada em Abertos fica com o
+    // operador errado e nunca é reconhecida quando o operador selecionar seu código de novo.
+    const operadorRaw = String(linhasAbertura[0][COL_RE.OPERADOR] || '');
+    const operadorCod = operadorRaw.split(/[\s\-—]+/)[0].trim();
+    const operadorNorm = normalizarCodigoOp(operadorCod);
+
+    // Bloqueia se o operador já tem outra abertura ativa agora — restaurar sobrescreveria
+    // um apontamento real e diferente. Precisa ser resolvido manualmente nesse caso.
+    const dadosAbertosAntes = abaAb.getDataRange().getValues();
+    for (let i = 1; i < dadosAbertosAntes.length; i++) {
+      if (mesmoOperador(dadosAbertosAntes[i][COL_AB.OPERADOR], operadorNorm)) {
+        return jsonResponse({ success: false, message: 'O operador já possui outro apontamento em aberto agora — restaure manualmente para não sobrescrever.' });
+      }
+    }
+
+    // Remove as linhas de FECHAMENTO de baixo para cima (não invalida índices das anteriores)
+    linhasFechamentoIdx.sort((a,b)=>b-a).forEach(idx => abaRe.deleteRow(idx + 1));
+
+    // Recalcula saldo parcial de cada série/item/operação envolvida — remover o fechamento
+    // pode ter "consumido" um saldo que precisa voltar a existir.
+    const dadosRePosRemocao = abaRe.getDataRange().getValues();
+    const chavesVistas = new Set();
+    linhasAbertura.forEach(ab => {
+      const serie = String(ab[COL_RE.SERIE] || '').split('|')[0].trim();
+      const item  = String(ab[COL_RE.COD_ITEM] || '').trim();
+      const op    = String(ab[COL_RE.OPERACAO] || '').substring(0,4);
+      const chave = serie+'||'+item+'||'+op;
+      if (!chavesVistas.has(chave) && serie && item) {
+        chavesVistas.add(chave);
+        recalcularSaldoParcial(serie, item, op, dadosRePosRemocao);
+      }
+    });
+
+    // Recria a entrada na aba Abertos a partir da abertura original
+    const abPrincipal = linhasAbertura[0];
+    const carimboAbertura = abPrincipal[COL_RE.CARIMBO] instanceof Date
+      ? Utilities.formatDate(abPrincipal[COL_RE.CARIMBO], 'GMT-3', 'dd/MM/yyyy HH:mm:ss')
+      : String(abPrincipal[COL_RE.CARIMBO] || '');
+
+    let loteSeriesJson = '', qtdPlanejadaTotal = 0, nrSerieUnica = '', implementoUnico = '', clienteUnico = '';
+    if (ehLote) {
+      const loteSeries = linhasAbertura.map(ab => {
+        const partes = String(ab[COL_RE.SERIE] || '').split('|').map(s=>s.trim());
+        const qtdPl = Number(ab[COL_RE.QTD_PLANEJADA]) || 0;
+        qtdPlanejadaTotal += qtdPl;
+        return { nrSerie: partes[0]||'', implemento: partes[1]||'', cliente: partes[2]||'', qtdPlanejada: qtdPl };
+      });
+      loteSeriesJson = JSON.stringify(loteSeries);
+    } else {
+      const partes = String(abPrincipal[COL_RE.SERIE] || '').split('|').map(s=>s.trim());
+      nrSerieUnica = partes[0]||''; implementoUnico = partes[1]||''; clienteUnico = partes[2]||'';
+      qtdPlanejadaTotal = Number(abPrincipal[COL_RE.QTD_PLANEJADA]) || 0;
+    }
+
+    const novaLinha = [
+      operadorNorm,
+      ehLote ? 'LOTE' : nrSerieUnica,
+      'ABERTURA',
+      String(abPrincipal[COL_RE.OPERACAO] || ''),
+      carimboAbertura,
+      String(abPrincipal[COL_RE.COD_ITEM] || ''),
+      String(qtdPlanejadaTotal || ''),
+      ehLote ? '' : nrSerieUnica,
+      ehLote ? 'LOTE' : implementoUnico,
+      ehLote ? '' : clienteUnico,
+      String(abPrincipal[COL_RE.OPERADOR] || ''),
+      loteSeriesJson,
+      idAlvo,
+    ];
+    abaAb.appendRow(novaLinha);
+    abaAb.getRange(abaAb.getLastRow(), 1).setNumberFormat('@');
+
+    return jsonResponse({ success: true, linhasFechamentoRemovidas: linhasFechamentoIdx.length, ehLote: ehLote });
+  } catch (err) {
+    return jsonResponse({ success: false, message: err.message });
+  } finally {
+    lock.releaseLock();
   }
 }
 
