@@ -1261,22 +1261,22 @@ function gravarApontamento(payload) {
       const operadorNormSaldo = normalizarCodigoOp(payload.operador || '');
 
       if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
-        // LOTE: atualiza saldo de cada série individualmente, usando o qtdPlanejada/qtdRealizada
-        // EFETIVO daquela série (loteQtdPorSerieMap) — nunca os totais do payload, que somam
-        // todas as séries do lote e produziriam saldo incorreto se houver mais de uma série.
+        // LOTE: atualiza saldo APENAS das séries sendo fechadas agora (payload.loteSeries).
+        // Iteramos payload.loteSeries — não loteSeriesFechamento (que inclui todas as originais).
+        // Séries não presentes neste fechamento não devem receber registro de saldo ainda.
+        // qtdPlTotalLote usa todas as originais para registrar o planejamento completo do lote.
         const qtdPlTotalLote = loteSeriesFechamento.reduce((s, x) => s + (Number(x.qtdPlanejada) || 0), 0);
-        for (const item of loteSeriesFechamento) {
+        for (const item of payload.loteSeries) {
           const nrSerieItem = String(item.nrSerie || '').trim();
           const efetivo = loteQtdPorSerieMap && loteQtdPorSerieMap[nrSerieItem];
-          const qtdPlItem = efetivo ? efetivo.qtdPlanejada : qtdPl;
-          const qtdReItem = efetivo ? efetivo.qtdRealizada : qtdRe;
+          if (!efetivo) continue; // segurança: nunca deveria ocorrer, mas evita saldo fantasma
           atualizarSaldoParcial(
             abaSaldo,
             nrSerieItem,
             codItemKey,
             opCod,
-            qtdPlItem,
-            qtdReItem,
+            efetivo.qtdPlanejada,
+            efetivo.qtdRealizada,
             carimbo,
             abertoIdPayload,
             operadorNormSaldo,
