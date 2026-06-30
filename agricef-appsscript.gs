@@ -849,14 +849,40 @@ function gravarApontamento(payload) {
       // B7.4: anti-duplo-fechamento — verifica se já existe linha de fechamento com este abertoId
       // em Respostas. Protege contra: retry após falha de rede onde o frontend não recebeu
       // a confirmação mas o backend já gravou. Só faz a checagem se abertoId foi informado.
+      //
+      // Para LOTE com múltiplos fechamentos parciais, o mesmo abertoId terá várias linhas de
+      // FECHAMENTO (uma por lote parcial). Nesse caso, verifica por SÉRIE: só bloqueia se todas
+      // as séries do payload já estão fechadas neste abertoId. Para série única, bloqueia se
+      // qualquer linha de fechamento com esse abertoId já existe.
       if (abertoIdPayload) {
         const tipoFechFormatado = TIPOS_APONTAMENTO[tipo] || tipo;
         const dadosReCheck = abaRe.getDataRange().getValues();
-        const jaFechado = dadosReCheck.some((r, idx) =>
-          idx > 0 &&
-          String(r[COL_RE.ABERTO_ID] || '').trim() === abertoIdPayload &&
-          String(r[COL_RE.TIPO]      || '').trim() === tipoFechFormatado
-        );
+        const ehLoteFechamento = Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
+
+        let jaFechado = false;
+        if (ehLoteFechamento) {
+          // Lote: bloqueia só se TODAS as séries do payload já constam como fechadas neste abertoId
+          const seriesJaFechadas = new Set();
+          for (let i = 1; i < dadosReCheck.length; i++) {
+            const r = dadosReCheck[i];
+            if (String(r[COL_RE.ABERTO_ID] || '').trim() !== abertoIdPayload) continue;
+            if (String(r[COL_RE.TIPO] || '').trim() !== tipoFechFormatado) continue;
+            // Extrai nrSerie do campo F (formato: "nrSerie | implemento | cliente")
+            const campoF = String(r[COL_RE.SERIE] || '').split(' | ')[0].trim();
+            if (campoF) seriesJaFechadas.add(campoF);
+          }
+          jaFechado = payload.loteSeries.every(item =>
+            seriesJaFechadas.has(String(item.nrSerie || '').trim())
+          );
+        } else {
+          // Série única: bloqueia se qualquer fechamento com esse abertoId já existe
+          jaFechado = dadosReCheck.some((r, idx) =>
+            idx > 0 &&
+            String(r[COL_RE.ABERTO_ID] || '').trim() === abertoIdPayload &&
+            String(r[COL_RE.TIPO]      || '').trim() === tipoFechFormatado
+          );
+        }
+
         if (jaFechado) {
           Logger.log('B7.4: fechamento duplo bloqueado — abertoId=' + abertoIdPayload + ' tipo=' + tipo);
           return jsonResponse({ success: false, message: 'Este apontamento já foi fechado. Nenhuma ação necessária.', jaFechado: true });
