@@ -51,6 +51,7 @@ const COL_RE = {
   OBS2:            13, // N  OBSERVAÇÃO 2
   QTD_PLANEJADA:   14, // O  QTD PLANEJADA
   ABERTO_ID:       15, // P  ID (abertoId AP-XXXXXXXXXX)
+  LOTE_SERIES:     16, // Q  LoteSeries JSON (ABERTURA de lote — para reconstrução do Abertos)
 };
 
 const COL_AB = {
@@ -493,7 +494,12 @@ function verificarAberto(operador, implemento) {
           const operadorNomeFallback = String(row[10] || '').trim();
           const abertaReal = buscarAberturaAbertaEmRespostas_(ss, operador, operadorNomeFallback);
           if (abertaReal) {
-            return jsonResponse({ aberto: true, loteSeries: null, ...abertaReal });
+            // Tenta recuperar loteSeries do Abertos (o fantasma ainda tem o JSON correto em row[11])
+            let loteFallback = abertaReal.loteSeries || null;
+            if (!loteFallback && row[11]) {
+              try { loteFallback = JSON.parse(String(row[11])); } catch(e) {}
+            }
+            return jsonResponse({ aberto: true, ...abertaReal, loteSeries: loteFallback });
           }
           return jsonResponse({ aberto: false });
         }
@@ -525,7 +531,8 @@ function verificarAberto(operador, implemento) {
     // ou quando Abertos ficou desincronizado por qualquer motivo.
     const abertaEmRe = buscarAberturaAbertaEmRespostas_(ss, operador);
     if (abertaEmRe) {
-      return jsonResponse({ aberto: true, loteSeries: null, ...abertaEmRe });
+      // abertaEmRe.loteSeries já vem populado se Respostas col Q tiver o JSON (novo comportamento)
+      return jsonResponse({ aberto: true, ...abertaEmRe });
     }
 
     return jsonResponse({ aberto: false });
@@ -583,6 +590,13 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
       const implemento = (partes[1] || '').trim();
       const cliente    = (partes[2] || '').trim();
 
+      // Col Q (índice 16): loteSeries JSON gravado na ABERTURA de lote — para reconstrução
+      let loteSeriesFromRe = null;
+      const loteSeriesRaw = String(row[16] || '').trim();
+      if (loteSeriesRaw) {
+        try { loteSeriesFromRe = JSON.parse(loteSeriesRaw); } catch(e) {}
+      }
+
       aberta = {
         tipo:          tipo,
         operacao:      String(row[3]  || '').trim(),
@@ -594,6 +608,7 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
         cliente:       cliente,
         operadorNome:  opRow,
         abertoId:      String(row[15] || '').trim(), // coluna P
+        loteSeries:    loteSeriesFromRe,              // coluna Q (null se não gravado)
       };
 
     } else if (_ehFe(tipo)) {
@@ -1111,11 +1126,16 @@ function gravarApontamento(payload) {
       // Nota: linha[15] (abertoId/elo de pareamento) já vem correto do cálculo acima
       // (abertoId novo para ABERTURA, payload.abertoId para FECHAMENTO) — não sobrescrever aqui,
       // pois isso apagava o elo em fechamentos de lote (bug: toda linha P ficava vazia).
+      // Para ABERTURA de lote: grava o loteSeries completo na col Q (índice 16) de cada linha.
+      // Permite que reconstruirAbertos e buscarAberturaAbertaEmRespostas_ recuperem a lista de
+      // séries mesmo após o Abertos ser reconstruído (que antes zeravam loteSeries para '').
+      const loteSeriesParaRespostas = tiposAbertura.includes(tipo) ? JSON.stringify(payload.loteSeries) : '';
       const rows = payload.loteSeries.map((item, idx) => {
         const linhaMod = [...linha];
         linhaMod[5]  = item.nrSerie + ' | ' + item.implemento + ' | ' + item.cliente;
         linhaMod[6]  = qtdRePorSerieArr[idx];          // G — qtd realizada por série
         linhaMod[14] = String(qtdPlPorSerieArr[idx]);  // O — qtd planejada por série
+        linhaMod[16] = loteSeriesParaRespostas;         // Q — loteSeries JSON (só ABERTURA)
         return linhaMod;
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
@@ -2459,11 +2479,15 @@ function reconstruirAbertos() {
   // código, corrompendo Abertos col 0. Solução: ler o mapeamento nome→código de Abertos
   // antes de sobrescrevê-la.
   const nomeToCodigoOp = {};
+  const abertoIdToLoteSeries = {}; // preserva loteSeries do Abertos antes de reconstruir
   const dadosAbAntes = abaAb.getDataRange().getValues();
   for (let i = 1; i < dadosAbAntes.length; i++) {
-    const codAntes  = String(dadosAbAntes[i][0]  || '').trim();
-    const nomeAntes = String(dadosAbAntes[i][10] || '').trim();
+    const codAntes      = String(dadosAbAntes[i][0]  || '').trim();
+    const nomeAntes     = String(dadosAbAntes[i][10] || '').trim();
+    const abertoIdAntes = String(dadosAbAntes[i][12] || '').trim();
+    const loteSerAntes  = String(dadosAbAntes[i][11] || '').trim();
     if (codAntes && nomeAntes) nomeToCodigoOp[nomeAntes] = codAntes;
+    if (abertoIdAntes && loteSerAntes) abertoIdToLoteSeries[abertoIdAntes] = loteSerAntes;
   }
 
   // Map: codigoOperador → dados da última abertura em aberto
@@ -2501,6 +2525,12 @@ function reconstruirAbertos() {
       const implemento = (partes[1] || '').trim();
       const cliente    = (partes[2] || '').trim();
 
+      const abertoIdRe = String(row[15] || '').trim();
+      // Tenta recuperar loteSeries: primeiro da col Q de Respostas (gravada desde a correção),
+      // depois do snapshot de Abertos (para registros anteriores à correção).
+      let loteSeriesStr = String(row[16] || '').trim();
+      if (!loteSeriesStr && abertoIdRe) loteSeriesStr = abertoIdToLoteSeries[abertoIdRe] || '';
+
       abertosPorOp[operadorCod] = {
         operador:      operadorCod,
         implemento:    nrSerie,          // col 1: chave de busca (=nrSerie)
@@ -2513,8 +2543,8 @@ function reconstruirAbertos() {
         implementoNome: implemento,      // col 8
         cliente:       cliente,          // col 9
         operadorNome:  operadorRaw,      // col 10
-        loteSeries:    '',               // col 11 — não reconstruído (não está em Respostas)
-        abertoId:      String(row[15] || '').trim(), // col 12 ← coluna P de Respostas
+        loteSeries:    loteSeriesStr,    // col 11 — recuperado de Respostas col Q ou snapshot Abertos
+        abertoId:      abertoIdRe,       // col 12 ← coluna P de Respostas
       };
 
     } else if (ehFechamento(tipo)) {
