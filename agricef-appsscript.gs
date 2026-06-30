@@ -68,6 +68,7 @@ const COL_AB = {
   OPERADOR_NOME:   10, // nome do operador
   LOTE_SERIES:     11, // JSON de lote de séries
   ABERTO_ID:       12, // abertoId (AP-XXXXXXXXXX)
+  IS_LOTE:         13, // 'Sim'/'Não' — identifica explicitamente apontamento em lote
 };
 
 const TIPOS_APONTAMENTO = {
@@ -559,6 +560,33 @@ function verificarAberto(operador, implemento) {
  * Custo: leitura sequencial de Respostas (~1-2s para 4000+ linhas).
  * Só é chamado em fallback (Abertos inconsistente ou fantasma), não em fluxo normal.
  */
+// Reconstrói o array loteSeries a partir de linhas irmãs em Respostas que compartilham o mesmo
+// abertoId. Usado como fallback para registros legados que não têm col Q preenchida (gravados
+// antes da versão que adicionou a coluna). dadosRe deve ser o array já lido pelo caller.
+function reconstruirLoteSeriesDeRespostas_(dadosRe, abertoId) {
+  if (!dadosRe || !abertoId) return null;
+  const resultado = [];
+  const _tiposAbSet = new Set([TIPOS_APONTAMENTO.ABERTURA, TIPOS_APONTAMENTO.INICIO_RETRABALHO, TIPOS_APONTAMENTO.INICIO_PARADA].map(v => v.normalize('NFC')));
+  for (let i = 1; i < dadosRe.length; i++) {
+    const row = dadosRe[i];
+    if (String(row[15] || '').trim() !== abertoId) continue;
+    if (!_tiposAbSet.has(String(row[2] || '').normalize('NFC'))) continue;
+    const campoF  = String(row[5] || '');
+    const partes  = campoF.split(' | ');
+    const nrSerie = (partes[0] || '').trim();
+    const impl    = (partes[1] || '').trim();
+    const cli     = (partes[2] || '').trim();
+    if (!nrSerie) continue;
+    resultado.push({
+      nrSerie:      nrSerie,
+      implemento:   impl,
+      cliente:      cli,
+      qtdPlanejada: Number(row[14]) || 0,
+    });
+  }
+  return resultado.length > 0 ? resultado : null;
+}
+
 function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
   const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
   if (!abaRe) return null;
@@ -590,11 +618,17 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
       const implemento = (partes[1] || '').trim();
       const cliente    = (partes[2] || '').trim();
 
-      // Col Q (índice 16): loteSeries JSON gravado na ABERTURA de lote — para reconstrução
+      // Col Q (índice 16): loteSeries JSON gravado na ABERTURA de lote — para reconstrução.
+      // Fallback para registros legados (sem col Q): reconstrói agrupando linhas irmãs pelo abertoId.
       let loteSeriesFromRe = null;
       const loteSeriesRaw = String(row[16] || '').trim();
       if (loteSeriesRaw) {
         try { loteSeriesFromRe = JSON.parse(loteSeriesRaw); } catch(e) {}
+      }
+      const abertoIdLinha = String(row[15] || '').trim();
+      if (!loteSeriesFromRe && abertoIdLinha && (nrSerie === '' || implemento === 'LOTE')) {
+        // Legado: implemento='LOTE' indica lote sem col Q — reconstrói das linhas irmãs
+        loteSeriesFromRe = reconstruirLoteSeriesDeRespostas_(dadosRe, abertoIdLinha);
       }
 
       aberta = {
@@ -607,8 +641,8 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
         implemento:    implemento,
         cliente:       cliente,
         operadorNome:  opRow,
-        abertoId:      String(row[15] || '').trim(), // coluna P
-        loteSeries:    loteSeriesFromRe,              // coluna Q (null se não gravado)
+        abertoId:      abertoIdLinha,    // coluna P
+        loteSeries:    loteSeriesFromRe, // coluna Q (ou reconstruído de irmãs; null se não é lote)
       };
 
     } else if (_ehFe(tipo)) {
@@ -625,11 +659,11 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
 
 function gravarApontamento(payload) {
   // LockService garante que duas requisições simultâneas não passem juntas pela validação.
-  // Perf: 20s (era 15s) — testes de carga mostraram 6 operações concorrentes levando até
-  // ~11.5s para a última da fila; o timeout maior dá margem antes de rejeitar com "ocupado".
+  // 30s (era 20s): lotes com muitas séries + flush duplo precisam de margem maior para não
+  // rejeitar com "ocupado" quando o Sheets está lento.
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
+    lock.waitLock(30000);
   } catch (lockErr) {
     // transiente:true — sinaliza ao frontend que é um erro recuperável (servidor ocupado,
     // não um problema com os dados), para que ele entre na fila de reenvio automático em
@@ -811,6 +845,24 @@ function gravarApontamento(payload) {
     // ---------------------------------------------------------------
     if (tiposFechamento.includes(tipo)) {
       const abertoIdPayload = String(payload.abertoId || '').trim();
+
+      // B7.4: anti-duplo-fechamento — verifica se já existe linha de fechamento com este abertoId
+      // em Respostas. Protege contra: retry após falha de rede onde o frontend não recebeu
+      // a confirmação mas o backend já gravou. Só faz a checagem se abertoId foi informado.
+      if (abertoIdPayload) {
+        const tipoFechFormatado = TIPOS_APONTAMENTO[tipo] || tipo;
+        const dadosReCheck = abaRe.getDataRange().getValues();
+        const jaFechado = dadosReCheck.some((r, idx) =>
+          idx > 0 &&
+          String(r[COL_RE.ABERTO_ID] || '').trim() === abertoIdPayload &&
+          String(r[COL_RE.TIPO]      || '').trim() === tipoFechFormatado
+        );
+        if (jaFechado) {
+          Logger.log('B7.4: fechamento duplo bloqueado — abertoId=' + abertoIdPayload + ' tipo=' + tipo);
+          return jsonResponse({ success: false, message: 'Este apontamento já foi fechado. Nenhuma ação necessária.', jaFechado: true });
+        }
+      }
+
       let encontrou = false;
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue;
@@ -1021,6 +1073,8 @@ function gravarApontamento(payload) {
           : gerarIdApontamento(), // P
     ];
 
+    let linhasGravadas = 1; // padrão série única; sobrescrito nos paths de lote abaixo
+
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
       // Bug#25 fix: todos os itens do lote devem ter nrSerie
       const semNrSerie = payload.loteSeries.filter(item => !item.nrSerie || String(item.nrSerie).trim() === '');
@@ -1140,6 +1194,11 @@ function gravarApontamento(payload) {
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
       abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
+      linhasGravadas = rows.length;
+      // Flush após batch write de lote: garante commit de Respostas antes de escrever Abertos.
+      // Sem isso, falha no Sheets após Respostas mas antes de Abertos deixa lote "invisível"
+      // (existe em Respostas mas operador não aparece como aberto).
+      SpreadsheetApp.flush();
     } else if (payload.lote && payload.lote.trim() !== '') {
       // Formato legado — mesma distribuição sem sobra; também não sobrescreve linha[15]
       // (ver comentário acima sobre o bug do elo de pareamento em fechamentos de lote)
@@ -1164,6 +1223,8 @@ function gravarApontamento(payload) {
       });
       const primeiraLinha = abaRe.getLastRow() + 1;
       abaRe.getRange(primeiraLinha, 1, rows.length, rows[0].length).setValues(rows);
+      linhasGravadas = rows.length;
+      SpreadsheetApp.flush(); // commit legado também garante atomicidade antes de Abertos
     } else {
       abaRe.appendRow(linha);
     }
@@ -1197,10 +1258,13 @@ function gravarApontamento(payload) {
 
       const abertoIdPayload = String(payload.abertoId || '').trim();
 
+      const operadorNormSaldo = normalizarCodigoOp(payload.operador || '');
+
       if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
         // LOTE: atualiza saldo de cada série individualmente, usando o qtdPlanejada/qtdRealizada
         // EFETIVO daquela série (loteQtdPorSerieMap) — nunca os totais do payload, que somam
         // todas as séries do lote e produziriam saldo incorreto se houver mais de uma série.
+        const qtdPlTotalLote = loteSeriesFechamento.reduce((s, x) => s + (Number(x.qtdPlanejada) || 0), 0);
         for (const item of loteSeriesFechamento) {
           const nrSerieItem = String(item.nrSerie || '').trim();
           const efetivo = loteQtdPorSerieMap && loteQtdPorSerieMap[nrSerieItem];
@@ -1214,18 +1278,21 @@ function gravarApontamento(payload) {
             qtdPlItem,
             qtdReItem,
             carimbo,
-            abertoIdPayload
+            abertoIdPayload,
+            operadorNormSaldo,
+            qtdPlTotalLote,
+            true
           );
         }
       } else {
         // Série única
         const nrSerieKey = String(payload.nrSerie || '').trim();
         if (nrSerieKey) {
-          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo, abertoIdPayload);
+          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo, abertoIdPayload, operadorNormSaldo, qtdPl, false);
         }
       }
     }
-    return jsonResponse({ success: true, message: 'Apontamento registrado com sucesso' });
+    return jsonResponse({ success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas });
 
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
@@ -1270,6 +1337,7 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
 
   if (tiposAb.includes(tipo)) {
     const opLabel = op1 || tipoParada || payload.retrabalho || '';
+    const _ehLoteAbertura = payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
     const novaLinha = [
       operador,                                             // 0  Operador
       implemento,                                           // 1  Implemento
@@ -1282,9 +1350,9 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
       payload.implemento   || '',                           // 8  ImplementoNome
       payload.cliente      || '',                           // 9  Cliente
       payload.operadorNome || '',                           // 10 OperadorNome
-      (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0)
-        ? JSON.stringify(payload.loteSeries) : '',          // 11 LoteSeries (JSON)
+      _ehLoteAbertura ? JSON.stringify(payload.loteSeries) : '', // 11 LoteSeries (JSON)
       abertoId || '',                                       // 12 AbertoId — chave de rastreamento
+      _ehLoteAbertura ? 'Sim' : 'Não',                     // 13 IsLote — flag explícita (evita heurística de texto)
     ];
 
     // Verifica por operador (não por série) — um aberto por operador
@@ -1383,6 +1451,7 @@ function getAbertosAction() {
         operadorNome:   String(row[10] || ''),
         loteSeries:     loteSeries,
         abertoId:       String(row[12] || ''),
+        isLote:         String(row[13] || '') === 'Sim',
       });
     }
     return jsonResponse({ success: true, abertos: abertos });
@@ -1609,13 +1678,17 @@ function garantirAbaAbertos(ss) {
   let aba = ss.getSheetByName(ABA_ABERTOS);
   if (!aba) {
     aba = ss.insertSheet(ABA_ABERTOS);
-    const cab = ['Operador','Implemento','Tipo','Operação','Carimbo','CodItem','QtdPlanejada','NrSerie','ImplementoNome','Cliente','OperadorNome','LoteSeries','AbertoId'];
+    const cab = ['Operador','Implemento','Tipo','Operação','Carimbo','CodItem','QtdPlanejada','NrSerie','ImplementoNome','Cliente','OperadorNome','LoteSeries','AbertoId','IsLote'];
     aba.appendRow(cab);
     aba.setFrozenRows(1);
     aba.getRange(1,1,1,cab.length).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
     // Formatos de texto definidos apenas na criação — evita chamada custosa a cada requisição
     aba.getRange('A:A').setNumberFormat('@');
     aba.getRange('E:E').setNumberFormat('@'); // carimbo como texto
+  } else if (aba.getLastColumn() < 14) {
+    // Migração leve: planilhas existentes ganham a coluna IsLote sem perder dados
+    aba.getRange(1, 14).setValue('IsLote');
+    aba.getRange(1, 14).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
   }
   return aba;
 }
@@ -1748,6 +1821,7 @@ function lerLinhaAbertos(row) {
     operadorNome:   String(row[COL_AB.OPERADOR_NOME]   || '').trim(),
     loteSeries:     loteSeries,
     abertoId:       String(row[COL_AB.ABERTO_ID]       || '').trim(),
+    isLote:         String(row[COL_AB.IS_LOTE]         || '') === 'Sim',
   };
 }
 
@@ -1787,7 +1861,7 @@ function garantirAbaSaldo(ss) {
   let aba = ss.getSheetByName(ABA_SALDO);
   if (!aba) {
     aba = ss.insertSheet(ABA_SALDO);
-    const cab = ['NrSerie','CodItem','Operacao','QtdRestante','UltimaAtualizacao','AbertoId'];
+    const cab = ['NrSerie','CodItem','Operacao','QtdRestante','UltimaAtualizacao','AbertoId','OperadorCod','QtdPlanejadaTotal','IsLote'];
     aba.appendRow(cab);
     aba.setFrozenRows(1);
     aba.getRange(1,1,1,cab.length).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
@@ -1796,12 +1870,25 @@ function garantirAbaSaldo(ss) {
     aba.getRange('B:B').setNumberFormat('@'); // CodItem
     aba.getRange('C:C').setNumberFormat('@'); // Operacao ← crítico: '0010' vira 10 sem isso
     aba.getRange('E:E').setNumberFormat('@'); // UltimaAtualizacao
-    aba.getRange('F:F').setNumberFormat('@'); // AbertoId — só rastreabilidade, não entra na chave de busca
+    aba.getRange('F:F').setNumberFormat('@'); // AbertoId
+    aba.getRange('G:G').setNumberFormat('@'); // OperadorCod
   } else if (aba.getLastColumn() < 6) {
-    // Migração leve: planilhas já existentes ganham a coluna sem perder dados
+    // Migração: adiciona AbertoId
     aba.getRange(1, 6).setValue('AbertoId');
     aba.getRange(1, 6).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
     aba.getRange('F:F').setNumberFormat('@');
+    aba.getRange(1, 7).setValue('OperadorCod');
+    aba.getRange(1, 8).setValue('QtdPlanejadaTotal');
+    aba.getRange(1, 9).setValue('IsLote');
+    aba.getRange(1, 7, 1, 3).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+    aba.getRange('G:G').setNumberFormat('@');
+  } else if (aba.getLastColumn() < 9) {
+    // Migração leve: planilhas com AbertoId ganham as 3 novas colunas de rastreabilidade
+    aba.getRange(1, 7).setValue('OperadorCod');
+    aba.getRange(1, 8).setValue('QtdPlanejadaTotal');
+    aba.getRange(1, 9).setValue('IsLote');
+    aba.getRange(1, 7, 1, 3).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+    aba.getRange('G:G').setNumberFormat('@');
   }
   return aba;
 }
@@ -1833,7 +1920,7 @@ function garantirAbaAnaliseIA(ss) {
 // abertoId (opcional): só rastreabilidade — não faz parte da chave de busca (NrSerie+CodItem+
 // Operacao continua sendo a chave, como sempre foi), grava o abertoId da abertura que gerou
 // este saldo para permitir agrupar saldos pendentes por lote de origem.
-function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo, abertoId) {
+function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo, abertoId, operadorCod, qtdPlanejadaTotal, isLote) {
   const dados = aba.getDataRange().getValues();
   const codItemNorm = String(codItem || '').trim();
 
@@ -1868,7 +1955,13 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
 
   if (matches.length === 0) {
     if (novoSaldo > 0) {
-      aba.appendRow([nrSerie, codItem, operacao, novoSaldo, carimbo, abertoId || '']);
+      aba.appendRow([
+        nrSerie, codItem, operacao, novoSaldo, carimbo,
+        abertoId         || '',
+        operadorCod      || '',
+        (qtdPlanejadaTotal != null ? qtdPlanejadaTotal : qtdPlanejada) || '',
+        isLote ? 'Sim' : 'Não',
+      ]);
     }
     return;
   }
@@ -1879,8 +1972,11 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
   } else {
     aba.getRange(linha, 3).setValue(operacao);
     aba.getRange(linha, 4).setValue(novoSaldo);
-    aba.getRange(linha, 6).setValue(abertoId || dados[matches[0]][5] || ''); // mantém o anterior se não vier um novo
     aba.getRange(linha, 5).setValue(carimbo);
+    aba.getRange(linha, 6).setValue(abertoId || dados[matches[0]][5] || '');
+    if (operadorCod)    aba.getRange(linha, 7).setValue(operadorCod);
+    if (qtdPlanejadaTotal != null) aba.getRange(linha, 8).setValue(qtdPlanejadaTotal);
+    if (isLote !== undefined) aba.getRange(linha, 9).setValue(isLote ? 'Sim' : 'Não');
   }
 }
 
@@ -1940,7 +2036,9 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
     }
   }
   if (saldo !== null && saldo > 0) {
-    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId]);
+    // Colunas 7-9 (OperadorCod, QtdPlanejadaTotal, IsLote) não estão disponíveis no replay —
+    // são preenchidas via atualizarSaldoParcial no fluxo normal de fechamento.
+    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId, '', '', '']);
   }
 }
 
@@ -2545,6 +2643,7 @@ function reconstruirAbertos() {
         operadorNome:  operadorRaw,      // col 10
         loteSeries:    loteSeriesStr,    // col 11 — recuperado de Respostas col Q ou snapshot Abertos
         abertoId:      abertoIdRe,       // col 12 ← coluna P de Respostas
+        isLote:        loteSeriesStr ? 'Sim' : 'Não', // col 13 — deriva do loteSeries sem heurística de texto
       };
 
     } else if (ehFechamento(tipo)) {
@@ -2572,6 +2671,7 @@ function reconstruirAbertos() {
     a.operadorNome,
     a.loteSeries,
     a.abertoId,
+    a.isLote || 'Não',
   ]);
 
   // Limpa Abertos de forma segura:
@@ -2584,17 +2684,17 @@ function reconstruirAbertos() {
   // Se faltam linhas, adiciona linhas em branco para ter espaço
   if (ultimaLinha < numNecessario + 1) {
     const faltam = numNecessario + 1 - ultimaLinha;
-    for (let k = 0; k < faltam; k++) abaAb.appendRow(['', '', '', '', '', '', '', '', '', '', '', '', '']);
+    for (let k = 0; k < faltam; k++) abaAb.appendRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
   }
 
   // Escreve as novas linhas (ou linha vazia na linha 2 se não houver abertos)
   if (novasLinhas.length > 0) {
-    abaAb.getRange(2, 1, novasLinhas.length, 13).setValues(novasLinhas);
+    abaAb.getRange(2, 1, novasLinhas.length, 14).setValues(novasLinhas);
     // Força formato texto na coluna A (operador)
     abaAb.getRange(2, 1, novasLinhas.length, 1).setNumberFormat('@');
   } else {
     // Sem abertos: apenas limpa linha 2
-    abaAb.getRange(2, 1, 1, 13).clearContent();
+    abaAb.getRange(2, 1, 1, 14).clearContent();
   }
 
   // Remove linhas excedentes (abaixo das novas linhas + 1 em branco obrigatória)

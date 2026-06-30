@@ -1281,7 +1281,7 @@ async function enviarApontamento() {
   // Sem isso, o operador só vê "Registrando..." parado — se o servidor estiver
   // processando uma fila de outras requisições (mesmo lock para todo apontamento),
   // pode levar até ~20s. Avisa que ainda está em andamento em vez de parecer travado.
-  const avisoDemoraEnvio = setTimeout(() => { btn.textContent = 'Ainda registrando... (até 20s)'; }, 5000);
+  const avisoDemoraEnvio = setTimeout(() => { btn.textContent = 'Ainda registrando... (até 30s)'; }, 5000);
 
   const ts   = carimboBrowser();
   const hora = pad(new Date().getHours())+':'+pad(new Date().getMinutes());
@@ -1344,6 +1344,14 @@ async function enviarApontamento() {
   try {
     const data = await postAPI(payload);
     if (data.success) {
+      // B1.1: valida que o backend gravou todas as séries do lote esperadas
+      const esperado = payload.loteSeries ? payload.loteSeries.length : null;
+      if (esperado && data.linhasGravadas !== undefined && data.linhasGravadas < esperado) {
+        showToast(
+          `⚠ Abertura parcial — ${data.linhasGravadas} de ${esperado} séries gravadas. Contate o supervisor antes de fechar.`,
+          'error', 10000
+        );
+      }
       mostrarSucesso(payload);
     } else if (data.bloqueado) {
       // Servidor bloqueou: atualiza o alerta com os dados do aberto
@@ -1361,6 +1369,10 @@ async function enviarApontamento() {
       btn.disabled=false; btn.textContent='Registrar apontamento';
       // Volta para step1 para mostrar o alerta
       voltarStep1();
+    } else if (data.jaFechado) {
+      // Fechamento duplo interceptado: o servidor já gravou este fechamento antes (retry após falha de rede)
+      showToast('Apontamento já fechado — nenhuma ação necessária.', 'success');
+      mostrarSucesso(payload);
     } else if (data.incompativel) {
       // Tipo de fechamento não corresponde ao tipo aberto
       showToast('Tipo incompatível: ' + data.message, 'error');
