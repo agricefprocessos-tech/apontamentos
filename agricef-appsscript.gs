@@ -2616,6 +2616,11 @@ function reconstruirAbertos() {
 
   // Map: codigoOperador → dados da última abertura em aberto
   const abertosPorOp = {};
+  // Contadores por abertoId: quantas séries foram abertas e fechadas
+  // Necessário para lotes parcialmente fechados: um FECHAMENTO de UMA série não deve
+  // remover o operador de abertosPorOp — só remove quando TODAS as séries foram fechadas.
+  const seriesAbertasPorId  = {}; // abertoId → count de linhas ABERTURA
+  const seriesFechadasPorId = {}; // abertoId → count de linhas FECHAMENTO
 
   for (let i = 1; i < dadosRe.length; i++) {
     const row = dadosRe[i];
@@ -2641,6 +2646,8 @@ function reconstruirAbertos() {
     const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
     if (!operadorCod) continue;
 
+    const abertoIdRe = String(row[15] || '').trim();
+
     if (ehAbertura(tipo)) {
       // Campo F: "22000073 | HAULER 10" | SÃO MARTINHO"
       const campoF     = String(row[5] || '');
@@ -2649,11 +2656,13 @@ function reconstruirAbertos() {
       const implemento = (partes[1] || '').trim();
       const cliente    = (partes[2] || '').trim();
 
-      const abertoIdRe = String(row[15] || '').trim();
       // Tenta recuperar loteSeries: primeiro da col Q de Respostas (gravada desde a correção),
       // depois do snapshot de Abertos (para registros anteriores à correção).
       let loteSeriesStr = String(row[16] || '').trim();
       if (!loteSeriesStr && abertoIdRe) loteSeriesStr = abertoIdToLoteSeries[abertoIdRe] || '';
+
+      // Conta série aberta por abertoId (para decidir fechamento parcial vs. total)
+      if (abertoIdRe) seriesAbertasPorId[abertoIdRe] = (seriesAbertasPorId[abertoIdRe] || 0) + 1;
 
       abertosPorOp[operadorCod] = {
         operador:      operadorCod,
@@ -2673,8 +2682,56 @@ function reconstruirAbertos() {
       };
 
     } else if (ehFechamento(tipo)) {
-      delete abertosPorOp[operadorCod];
+      // Conta série fechada por abertoId
+      if (abertoIdRe) seriesFechadasPorId[abertoIdRe] = (seriesFechadasPorId[abertoIdRe] || 0) + 1;
+
+      // Para lotes com fechamento parcial: só remove o operador de abertosPorOp quando
+      // TODAS as séries do lote foram fechadas (fechadas >= abertas).
+      // Para não-lote (série única): abertas=1, fechadas=1 → remove imediatamente.
+      const totalAbertas  = seriesAbertasPorId[abertoIdRe] || 1;
+      const totalFechadas = seriesFechadasPorId[abertoIdRe] || 0;
+      if (totalFechadas >= totalAbertas) {
+        delete abertosPorOp[operadorCod];
+      }
     }
+  }
+
+  // Para lotes com fechamento parcial: filtrar loteSeries para manter apenas séries não fechadas.
+  // Constrói mapa abertoId → Set de nrSerie já fechados (extraídos das linhas FECHAMENTO).
+  const seriesFechadasPorIdSet = {}; // abertoId → Set<nrSerie>
+  for (let i = 1; i < dadosRe.length; i++) {
+    const row = dadosRe[i];
+    if (!row[0] && !row[1]) continue;
+    const carimboBruto = formatarCarimboGs(row[0]);
+    if (!carimboBruto || carimboBruto.includes('1899')) continue;
+    const tipo = String(row[2] || '').trim();
+    if (!ehFechamento(tipo)) continue;
+    const abertoIdRe = String(row[15] || '').trim();
+    if (!abertoIdRe) continue;
+    const nrSerieFech = String(row[5] || '').split(' | ')[0].trim();
+    if (!nrSerieFech) continue;
+    if (!seriesFechadasPorIdSet[abertoIdRe]) seriesFechadasPorIdSet[abertoIdRe] = new Set();
+    seriesFechadasPorIdSet[abertoIdRe].add(nrSerieFech);
+  }
+  // Aplica filtro de séries restantes nos lotes parcialmente fechados
+  for (const op of Object.values(abertosPorOp)) {
+    if (!op.abertoId || !op.loteSeries) continue;
+    try {
+      const original = JSON.parse(op.loteSeries);
+      const fechadasSet = seriesFechadasPorIdSet[op.abertoId];
+      if (!fechadasSet || fechadasSet.size === 0) continue;
+      const restantes = original.filter(s => !fechadasSet.has(String(s.nrSerie || '').trim()));
+      if (restantes.length !== original.length) {
+        op.loteSeries = JSON.stringify(restantes);
+        // Atualiza nrSerie/implementoNome/cliente para a primeira série restante (chave de busca)
+        if (restantes.length > 0) {
+          op.nrSerie       = String(restantes[0].nrSerie    || '').trim();
+          op.implemento    = op.nrSerie; // col 1 = nrSerie como chave
+          op.implementoNome = String(restantes[0].implemento || '').trim();
+          op.cliente       = String(restantes[0].cliente     || '').trim();
+        }
+      }
+    } catch(e) { /* loteSeries inválido — ignora */ }
   }
 
   // Guarda quantos registros existiam antes
