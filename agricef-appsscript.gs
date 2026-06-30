@@ -599,6 +599,10 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
   const _ehFe = function(t) { return _tiposFeSet.has(String(t || '').normalize('NFC')); };
 
   let aberta = null;
+  // Para lotes com fechamento parcial: mesmo bug que reconstruirAbertos — um FECHAMENTO de
+  // uma série cancelava toda a abertura do operador. Corrigido com contagem por abertoId.
+  const _seriesAbertasPorId  = {}; // abertoId → count de linhas ABERTURA
+  const _seriesFechadasPorId = {}; // abertoId → count de linhas FECHAMENTO
 
   for (let i = 1; i < dadosRe.length; i++) {
     const row    = dadosRe[i];
@@ -609,6 +613,7 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
     if (!opRow || !matchOp) continue;
 
     const tipo = String(row[2] || '').trim();
+    const abertoIdLinha = String(row[15] || '').trim();
 
     if (_ehAb(tipo)) {
       // Desmembra campo F: "nrSerie | implementoNome | cliente"
@@ -625,11 +630,12 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
       if (loteSeriesRaw) {
         try { loteSeriesFromRe = JSON.parse(loteSeriesRaw); } catch(e) {}
       }
-      const abertoIdLinha = String(row[15] || '').trim();
       if (!loteSeriesFromRe && abertoIdLinha && (nrSerie === '' || implemento === 'LOTE')) {
         // Legado: implemento='LOTE' indica lote sem col Q — reconstrói das linhas irmãs
         loteSeriesFromRe = reconstruirLoteSeriesDeRespostas_(dadosRe, abertoIdLinha);
       }
+
+      if (abertoIdLinha) _seriesAbertasPorId[abertoIdLinha] = (_seriesAbertasPorId[abertoIdLinha] || 0) + 1;
 
       aberta = {
         tipo:          tipo,
@@ -646,7 +652,32 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
       };
 
     } else if (_ehFe(tipo)) {
-      aberta = null; // FECHAMENTO cancela a última abertura
+      // Conta série fechada por abertoId
+      if (abertoIdLinha) _seriesFechadasPorId[abertoIdLinha] = (_seriesFechadasPorId[abertoIdLinha] || 0) + 1;
+      // Só cancela aberta quando TODAS as séries do lote foram fechadas
+      const totalAbertas  = _seriesAbertasPorId[abertoIdLinha] || 1;
+      const totalFechadas = _seriesFechadasPorId[abertoIdLinha] || 0;
+      if (totalFechadas >= totalAbertas) {
+        aberta = null;
+      }
+    }
+  }
+
+  // Para lotes parcialmente fechados: filtrar loteSeries para mostrar apenas séries restantes
+  if (aberta && aberta.loteSeries && Array.isArray(aberta.loteSeries) && aberta.abertoId) {
+    const _fechadasSet = new Set();
+    for (let i = 1; i < dadosRe.length; i++) {
+      const row = dadosRe[i];
+      if (String(row[15] || '').trim() !== aberta.abertoId) continue;
+      const tipo = String(row[2] || '').trim();
+      if (!_ehFe(tipo)) continue;
+      const nrSerieFech = String(row[5] || '').split(' | ')[0].trim();
+      if (nrSerieFech) _fechadasSet.add(nrSerieFech);
+    }
+    if (_fechadasSet.size > 0) {
+      aberta.loteSeries = aberta.loteSeries.filter(s =>
+        !_fechadasSet.has(String(s.nrSerie || '').trim())
+      );
     }
   }
 
