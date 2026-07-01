@@ -1426,7 +1426,9 @@ function gravarApontamento(payload) {
         }
       }
     }
-    return jsonResponse({ success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas });
+    const respOk = { success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas };
+    if (abertoId) respOk.abertoId = abertoId; // presente apenas em ABERTURA, util para o cliente nao precisar chamar verificarAberto
+    return jsonResponse(respOk);
 
   } catch (err) {
     return jsonResponse({ success: false, message: err.message });
