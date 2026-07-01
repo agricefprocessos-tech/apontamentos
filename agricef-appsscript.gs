@@ -707,7 +707,27 @@ function gravarApontamento(payload) {
     if (!abaRe) return jsonResponse({ success: false, message: 'Aba "' + ABA_RESPOSTAS + '" não encontrada.' });
 
     const abaAb = garantirAbaAbertos(ss);
-    const tipo  = payload.tipoApontamento || '';
+
+    // ---------------------------------------------------------------
+    // SANITIZAÇÃO DE ENTRADA — normaliza campos ANTES de qualquer
+    // validação: trim de espaços, uppercase em tipoApontamento,
+    // normalização de nrSerie em cada item do lote.
+    // Protege contra erros humanos de digitação comuns.
+    // ---------------------------------------------------------------
+    const _san = v => String(v == null ? '' : v).trim();
+    payload.tipoApontamento = _san(payload.tipoApontamento).toUpperCase();
+    payload.operador        = _san(payload.operador);
+    payload.nrSerie         = _san(payload.nrSerie);
+    payload.codItem         = _san(payload.codItem);
+    payload.operacao        = _san(payload.operacao);
+    payload.abertoId        = _san(payload.abertoId);
+    if (Array.isArray(payload.loteSeries)) {
+      payload.loteSeries = payload.loteSeries.map(function(item) {
+        return Object.assign({}, item, { nrSerie: _san(item.nrSerie) });
+      });
+    }
+
+    const tipo = payload.tipoApontamento;
 
     // ---------------------------------------------------------------
     // VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS (Bug#16, Bug#17, Bug#18)
@@ -754,6 +774,20 @@ function gravarApontamento(payload) {
       }
     }
 
+    // Detectar nrSerie duplicada em loteSeries — erro humano comum ao montar o lote
+    if (_ehLote && Array.isArray(payload.loteSeries)) {
+      const _seenSeries = new Set();
+      const _dupSeries  = [];
+      for (var _di = 0; _di < payload.loteSeries.length; _di++) {
+        const _ds = payload.loteSeries[_di].nrSerie; // já trimada pela sanitização acima
+        if (!_ds) continue;
+        if (_seenSeries.has(_ds)) { _dupSeries.push(_ds); } else { _seenSeries.add(_ds); }
+      }
+      if (_dupSeries.length > 0) {
+        return jsonResponse({ success: false, message: 'Série(s) duplicada(s) em loteSeries: ' + _dupSeries.join(', ') + '. Cada série deve aparecer apenas uma vez.', seriesDuplicadas: _dupSeries });
+      }
+    }
+
     // Validar nrSerie única contra cadastro (lotes já validam as séries de loteSeries acima)
     if (_tiposAb.includes(tipo) && !_ehLote && payload.nrSerie) {
       const abaSeriesSingle = ss.getSheetByName(ABA_SERIES);
@@ -770,6 +804,20 @@ function gravarApontamento(payload) {
             message: 'Série não encontrada no cadastro: ' + nrSerieSingle,
             seriesInvalidas: [nrSerieSingle],
           });
+        }
+      }
+    }
+
+    // Validar qtdPlanejada para tipos de abertura: deve ser número não-negativo
+    if (_tiposAb.includes(tipo)) {
+      const _qtdPlRaw = payload.qtdPlanejada;
+      if (_qtdPlRaw !== undefined && _qtdPlRaw !== null && _qtdPlRaw !== '') {
+        const _qtdPlNum = Number(_qtdPlRaw);
+        if (isNaN(_qtdPlNum) || !isFinite(_qtdPlNum)) {
+          return jsonResponse({ success: false, message: 'Campo qtdPlanejada inválido: "' + _qtdPlRaw + '". Deve ser um número.', qtdPlanejadaInvalida: true });
+        }
+        if (_qtdPlNum < 0) {
+          return jsonResponse({ success: false, message: 'Campo qtdPlanejada não pode ser negativo. Recebido: ' + _qtdPlNum, qtdPlanejadaInvalida: true });
         }
       }
     }
@@ -896,6 +944,11 @@ function gravarApontamento(payload) {
     // ---------------------------------------------------------------
     if (tiposFechamento.includes(tipo)) {
       const abertoIdPayload = String(payload.abertoId || '').trim();
+
+      // Validar formato do abertoId quando fornecido: deve ser AP-XXXXXXXXXX (10 hex)
+      if (abertoIdPayload && !/^AP-[0-9A-Fa-f]{10}$/i.test(abertoIdPayload)) {
+        return jsonResponse({ success: false, message: 'Formato de abertoId inválido: "' + abertoIdPayload + '". Formato esperado: AP- seguido de 10 caracteres hexadecimais.', abertoIdInvalido: true });
+      }
 
       // B7.4: anti-duplo-fechamento — verifica se já existe linha de fechamento com este abertoId
       // em Respostas. Protege contra: retry após falha de rede onde o frontend não recebeu
