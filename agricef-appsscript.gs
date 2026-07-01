@@ -28,6 +28,7 @@ const ABA_SERIES      = 'Cadastro_Series';
 const ABA_OPERACOES   = 'Cadastro_Operacoes';
 const ABA_ANALISES_IA = 'Analises_IA';
 const ABA_JUSTIFICATIVAS = 'Justificativas_Auditoria';
+const ABA_IDEMPOTENCY    = 'IdempotencyLog';
 
 // ================================================================
 // SCHEMA DE COLUNAS (0-indexed)
@@ -685,6 +686,53 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
 }
 
 // ================================================================
+// HELPERS DE PERFORMANCE / IDEMPOTÊNCIA
+// ================================================================
+
+// Retorna Set de nrSerie válidas com cache de 5 min — elimina releitura
+// repetida do Cadastro_Series em cada request (única ou lote).
+function getSeriesValidas_(ss) {
+  try {
+    const cache  = CacheService.getScriptCache();
+    const cached = cache.get('series_validas_v1');
+    if (cached) return new Set(JSON.parse(cached));
+    const aba = ss.getSheetByName(ABA_SERIES);
+    if (!aba) return new Set();
+    const series = aba.getDataRange().getValues().slice(1)
+      .filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
+      .map(r => String(r[0]).trim());
+    try { cache.put('series_validas_v1', JSON.stringify(series), 300); } catch(e) {}
+    return new Set(series);
+  } catch(e) { return new Set(); }
+}
+
+// Garante que a aba IdempotencyLog existe com cabeçalho.
+function garantirAbaIdempotencyLog(ss) {
+  let aba = ss.getSheetByName(ABA_IDEMPOTENCY);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_IDEMPOTENCY);
+    aba.appendRow(['requestId', 'responseJson', 'timestamp']);
+    aba.setFrozenRows(1);
+  }
+  return aba;
+}
+
+// Trigger diário: remove entradas mais antigas que 24 h do IdempotencyLog.
+function limparIdempotencyLog() {
+  try {
+    const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const aba = ss.getSheetByName(ABA_IDEMPOTENCY);
+    if (!aba) return;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const dados  = aba.getDataRange().getValues();
+    for (let i = dados.length - 1; i >= 1; i--) {
+      const ts = new Date(dados[i][2]).getTime();
+      if (!isNaN(ts) && ts < cutoff) aba.deleteRow(i + 1);
+    }
+  } catch(e) {}
+}
+
+// ================================================================
 // GRAVAR APONTAMENTO
 // ================================================================
 
@@ -718,7 +766,38 @@ function gravarApontamento(payload) {
     const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
     if (!abaRe) return jsonResponse({ success: false, message: 'Aba "' + ABA_RESPOSTAS + '" não encontrada.' });
 
+    // Fallback persistente de idempotência: CacheService foi frio (GAS restart ou TTL expirou).
+    // Lê só a col A do IdempotencyLog — rápido, aba pequena (máx. 24h de dados).
+    if (reqId) {
+      try {
+        const abaLog = ss.getSheetByName(ABA_IDEMPOTENCY);
+        if (abaLog && abaLog.getLastRow() > 1) {
+          const ids = abaLog.getRange(2, 1, abaLog.getLastRow() - 1, 1).getValues();
+          const idx = ids.findIndex(r => String(r[0]).trim() === reqId);
+          if (idx >= 0) {
+            const respStr = String(abaLog.getRange(idx + 2, 2).getValue());
+            try {
+              const parsed = JSON.parse(respStr);
+              // Restaura CacheService para os próximos retries desta sessão
+              try { CacheService.getScriptCache().put('req_' + reqId, respStr, 21600); } catch(e) {}
+              return jsonResponse(parsed);
+            } catch(e) {}
+          }
+        }
+      } catch(e) {}
+    }
+
     const abaAb = garantirAbaAbertos(ss);
+
+    // _dadosRe: leitura única da aba Respostas dentro do lock — reaproveitada em:
+    //   • verificação de fantasma (linha de abertura sem par em Respostas)
+    //   • B7.4 anti-duplo-fechamento
+    // Evita duas chamadas getDataRange() na mesma execução.
+    let _dadosRe = null;
+    const getDadosRe = () => {
+      if (!_dadosRe) _dadosRe = abaRe.getDataRange().getValues();
+      return _dadosRe;
+    };
 
     // ---------------------------------------------------------------
     // SANITIZAÇÃO DE ENTRADA — normaliza campos ANTES de qualquer
@@ -800,23 +879,16 @@ function gravarApontamento(payload) {
       }
     }
 
-    // Validar nrSerie única contra cadastro (lotes já validam as séries de loteSeries acima)
+    // Validar nrSerie única contra cadastro (lotes já validam as séries de loteSeries abaixo)
     if (_tiposAb.includes(tipo) && !_ehLote && payload.nrSerie) {
-      const abaSeriesSingle = ss.getSheetByName(ABA_SERIES);
-      if (abaSeriesSingle) {
-        const seriesSingleData = abaSeriesSingle.getDataRange().getValues().slice(1);
-        const seriesValidasSingle = new Set(
-          seriesSingleData.filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
-                          .map(r => String(r[0]).trim())
-        );
-        const nrSerieSingle = String(payload.nrSerie).trim();
-        if (nrSerieSingle && !seriesValidasSingle.has(nrSerieSingle)) {
-          return jsonResponse({
-            success: false,
-            message: 'Série não encontrada no cadastro: ' + nrSerieSingle,
-            seriesInvalidas: [nrSerieSingle],
-          });
-        }
+      const seriesValidasSingle = getSeriesValidas_(ss);
+      const nrSerieSingle = String(payload.nrSerie).trim();
+      if (nrSerieSingle && seriesValidasSingle.size > 0 && !seriesValidasSingle.has(nrSerieSingle)) {
+        return jsonResponse({
+          success: false,
+          message: 'Série não encontrada no cadastro: ' + nrSerieSingle,
+          seriesInvalidas: [nrSerieSingle],
+        });
       }
     }
 
@@ -875,9 +947,9 @@ function gravarApontamento(payload) {
           // Se o abertoId não existe em Respostas (col P), o registro é fantasma —
           // remove-o e deixa a abertura continuar.
           if (abertoIdExistente) {
-            const abaRePhantom = ss.getSheetByName(ABA_RESPOSTAS);
-            if (abaRePhantom) {
-              const dadosRePhantom = abaRePhantom.getDataRange().getValues();
+            // Reaprovita getDadosRe() — evita segunda leitura completa da aba Respostas
+            {
+              const dadosRePhantom = getDadosRe();
               const existeEmRe = dadosRePhantom.some(
                 (r, idx) => idx > 0 && String(r[15] || '').trim() === abertoIdExistente
               );
@@ -972,7 +1044,7 @@ function gravarApontamento(payload) {
       // qualquer linha de fechamento com esse abertoId já existe.
       if (abertoIdPayload) {
         const tipoFechFormatado = TIPOS_APONTAMENTO[tipo] || tipo;
-        const dadosReCheck = abaRe.getDataRange().getValues();
+        const dadosReCheck = getDadosRe(); // reutiliza leitura já feita (lazy, uma só vez por request)
         const ehLoteFechamento = Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0;
 
         let jaFechado = false;
@@ -1234,17 +1306,14 @@ function gravarApontamento(payload) {
         const duplicatas = nrSeriesNoLote.filter((s, i) => nrSeriesNoLote.indexOf(s) !== i);
         return jsonResponse({ success: false, message: 'Séries duplicadas no lote: ' + [...new Set(duplicatas)].join(', '), duplicatas: [...new Set(duplicatas)] });
       }
-      // Bug#11 fix: validar séries do LOTE contra cadastro
-      const abaSeriesLote = ss.getSheetByName(ABA_SERIES);
-      if (abaSeriesLote) {
-        const seriesData = abaSeriesLote.getDataRange().getValues().slice(1);
-        const seriesValidas = new Set(
-          seriesData.filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
-                    .map(r => String(r[0]).trim())
-        );
-        const seriesInvalidas = payload.loteSeries
-          .filter(item => item.nrSerie && !seriesValidas.has(String(item.nrSerie).trim()))
-          .map(item => item.nrSerie);
+      // Bug#11 fix: validar séries do LOTE contra cadastro (usa cache — sem releitura do sheet)
+      {
+        const seriesValidas = getSeriesValidas_(ss);
+        const seriesInvalidas = seriesValidas.size > 0
+          ? payload.loteSeries
+              .filter(item => item.nrSerie && !seriesValidas.has(String(item.nrSerie).trim()))
+              .map(item => item.nrSerie)
+          : []; // Set vazio = falha no cache — skip silencioso para não bloquear
         if (seriesInvalidas.length > 0) {
           return jsonResponse({
             success: false,
@@ -1440,9 +1509,16 @@ function gravarApontamento(payload) {
     }
     const respOk = { success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas };
     if (abertoId) respOk.abertoId = abertoId; // presente apenas em ABERTURA, util para o cliente nao precisar chamar verificarAberto
-    // Armazena no cache para idempotência: retries com o mesmo requestId retornam este resultado (TTL 6h)
+    // Idempotência: persiste resposta em CacheService (rápido) e IdempotencyLog (durável).
+    // CacheService: TTL 6h, sobrevive a restarts mas não a longos períodos de inatividade.
+    // IdempotencyLog: durável, checado como fallback quando CacheService está frio.
     if (reqId) {
-      try { CacheService.getScriptCache().put('req_' + reqId, JSON.stringify(respOk), 21600); } catch(e) {}
+      const respStr = JSON.stringify(respOk);
+      try { CacheService.getScriptCache().put('req_' + reqId, respStr, 21600); } catch(e) {}
+      try {
+        const abaLog = garantirAbaIdempotencyLog(ss);
+        abaLog.appendRow([reqId, respStr, new Date().toISOString()]);
+      } catch(e) {}
     }
     return jsonResponse(respOk);
 
@@ -1653,7 +1729,8 @@ function invalidarCacheCadastros() {
   try {
     const c = CacheService.getScriptCache();
     c.remove('cadastros_v3');
-    c.remove('cadastros_v2'); // limpa versão antiga se ainda existir
+    c.remove('cadastros_v2');     // versão antiga
+    c.remove('series_validas_v1'); // cache de séries válidas usado em validação de entrada
   } catch(e) {}
 }
 
