@@ -754,6 +754,26 @@ function gravarApontamento(payload) {
       }
     }
 
+    // Validar nrSerie única contra cadastro (lotes já validam as séries de loteSeries acima)
+    if (_tiposAb.includes(tipo) && !_ehLote && payload.nrSerie) {
+      const abaSeriesSingle = ss.getSheetByName(ABA_SERIES);
+      if (abaSeriesSingle) {
+        const seriesSingleData = abaSeriesSingle.getDataRange().getValues().slice(1);
+        const seriesValidasSingle = new Set(
+          seriesSingleData.filter(r => String(r[3]).toUpperCase() !== 'NÃO' && r[0] !== '')
+                          .map(r => String(r[0]).trim())
+        );
+        const nrSerieSingle = String(payload.nrSerie).trim();
+        if (nrSerieSingle && !seriesValidasSingle.has(nrSerieSingle)) {
+          return jsonResponse({
+            success: false,
+            message: 'Série não encontrada no cadastro: ' + nrSerieSingle,
+            seriesInvalidas: [nrSerieSingle],
+          });
+        }
+      }
+    }
+
     // Lê Abertos UMA VEZ — reaproveitado em validação, loteSeriesFechamento e atualizarAbertos
     const dadosAbertos = abaAb.getDataRange().getValues();
 
@@ -925,7 +945,11 @@ function gravarApontamento(payload) {
         if (!dadosAbertos[i][0]) continue;
         const rowId   = String(dadosAbertos[i][12] || '').trim();
         const matchId = abertoIdPayload && rowId && rowId === abertoIdPayload;
-        const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador);
+        // matchOp: quando abertoId é fornecido, só aceita linha que NÃO tem abertoId próprio
+        // (entrada legada sem ID). Se a linha tem abertoId diferente → ignora, evita fechar
+        // o apontamento errado silenciosamente quando o usuário passa um abertoId inválido.
+        const matchOp = !matchId && mesmoOperador(dadosAbertos[i][0], payload.operador) &&
+                        (!abertoIdPayload || !rowId);
         if (matchId || matchOp) {
           // Bug#5 fix: abertoId só pode ser usado pelo próprio operador que o criou
           if (matchId && !mesmoOperador(dadosAbertos[i][0], payload.operador)) {
