@@ -689,6 +689,18 @@ function buscarAberturaAbertaEmRespostas_(ss, operador, operadorNome) {
 // ================================================================
 
 function gravarApontamento(payload) {
+  // Idempotência: verifica requestId ANTES do lock — evita contenção desnecessária em retries.
+  // O cliente inclui um requestId único por operação lógica; o GAS armazena a resposta em
+  // CacheService (TTL 6h). Retries com o mesmo requestId recebem o resultado cacheado sem
+  // re-executar, tornando safe qualquer retry de escrita sem risco de duplicata.
+  const reqId = String(payload.requestId || '').trim().replace(/[^a-zA-Z0-9_\-]/g, '').substring(0, 64);
+  if (reqId) {
+    try {
+      const cached = CacheService.getScriptCache().get('req_' + reqId);
+      if (cached) return jsonResponse(JSON.parse(cached));
+    } catch(e) { /* CacheService indisponível — prossegue normalmente sem idempotência */ }
+  }
+
   // LockService garante que duas requisições simultâneas não passem juntas pela validação.
   // 30s (era 20s): lotes com muitas séries + flush duplo precisam de margem maior para não
   // rejeitar com "ocupado" quando o Sheets está lento.
@@ -1428,6 +1440,10 @@ function gravarApontamento(payload) {
     }
     const respOk = { success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas };
     if (abertoId) respOk.abertoId = abertoId; // presente apenas em ABERTURA, util para o cliente nao precisar chamar verificarAberto
+    // Armazena no cache para idempotência: retries com o mesmo requestId retornam este resultado (TTL 6h)
+    if (reqId) {
+      try { CacheService.getScriptCache().put('req_' + reqId, JSON.stringify(respOk), 21600); } catch(e) {}
+    }
     return jsonResponse(respOk);
 
   } catch (err) {
