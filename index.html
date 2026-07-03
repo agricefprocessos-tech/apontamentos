@@ -574,6 +574,16 @@ function carimboBrowser() {
     ' '+pad(n.getHours())+':'+pad(n.getMinutes())+':'+pad(n.getSeconds());
 }
 
+// Gera a chave de idempotência enviada como payload.requestId. O backend já suporta isso
+// (CacheService + IdempotencyLog) para nunca duplicar um registro reenviado — mas o frontend
+// nunca preenchia esse campo, deixando a proteção morta. Gerado uma vez por tentativa lógica
+// de envio (não por chamada HTTP) e reaproveitado em todos os retries dessa mesma tentativa
+// (salvarOffline preserva o requestId original do payload).
+function gerarRequestId() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'rid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+}
+
 // ===================== CADASTROS =====================
 const CACHE_KEY = 'agricef_cadastros';
 const CACHE_TTL = 60 * 1000; // 1 minuto — curto para operações novas aparecerem rápido
@@ -1337,6 +1347,12 @@ async function enviarApontamento() {
 
   const ts   = carimboBrowser();
   const hora = pad(new Date().getHours())+':'+pad(new Date().getMinutes());
+  // requestId: gerado UMA VEZ aqui, antes de qualquer tentativa de envio — se esta tentativa
+  // falhar (timeout/rede) e cair na fila offline, o retry reusa o MESMO requestId (salvarOffline
+  // preserva payload.requestId). O backend usa isso para idempotência (CacheService +
+  // IdempotencyLog): reenviar o mesmo requestId nunca duplica o registro, mesmo que a tentativa
+  // original tenha na verdade terminado de processar no servidor depois do cliente desistir.
+  const requestId = gerarRequestId();
 
   let payload;
 
@@ -1352,6 +1368,7 @@ async function enviarApontamento() {
     // pode estar populado de uma ação anterior sem relação com este fechamento.
     const ehFechLote = Array.isArray(info.loteSeries) && info.loteSeries.length > 0;
     payload = {
+      requestId,
       timestamp: ts, hora,
       operador: state.operador, operadorNome: state.operadorNome,
       nrSerie: info.nrSerie || state.nrSerie,
@@ -1375,6 +1392,7 @@ async function enviarApontamento() {
     // FLUXO NORMAL
     const qtdPl = document.getElementById('qtdPlanejada') ? document.getElementById('qtdPlanejada').value : '';
     payload = {
+      requestId,
       timestamp: ts, hora,
       operador: state.operador, operadorNome: state.operadorNome,
       nrSerie: state.nrSerie, implemento: state.implemento, cliente: state.cliente,
@@ -1612,13 +1630,30 @@ function sincronizarFila(manual=false){
   _filaSincPromise = _sincronizarFilaImpl(manual).finally(() => { _sincronizando = false; });
   return _filaSincPromise;
 }
+// Identidade estável de um item da fila offline — usa requestId quando presente (itens salvos
+// após a introdução da idempotência); cai para _salvoEm (timestamp ISO com precisão de ms,
+// gerado no momento do salvarOffline) em itens legados que já estavam na fila antes disso.
+function _idItemFila(item) {
+  return item.requestId || item._salvoEm;
+}
+
 async function _sincronizarFilaImpl(manual){
   const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
   if(!fila.length){ atualizarBadgeFila(); return; }
   {
-    const nova=[];
+    // resultados: Map de identidade -> 'sincronizado' | item atualizado (nova contagem de
+    // tentativas) | 'falhou-definitivo'. Cada await postAPI() abaixo pode levar dezenas de
+    // segundos (backend sob carga real) — durante essa janela, um NOVO apontamento pode ser
+    // salvo na fila por salvarOffline() rodando em paralelo (ex: operador envia outro registro
+    // enquanto esta sincronização de 30s ainda está no meio do processamento anterior).
+    // Por isso NÃO escrevemos localStorage com base no snapshot `fila` lido acima — em vez
+    // disso, cada item novo intercalado seria apagado ao sobrescrever com esse snapshot antigo
+    // (exatamente a causa dos apontamentos que "somem" sem erro). Em vez disso, mesclamos por
+    // identidade contra o estado ATUAL do localStorage só no final (ver bloco de escrita abaixo).
+    const resultados = new Map();
     let sincronizados = 0;
     for(const item of fila){
+      const id = _idItemFila(item);
       const tentativas = (item._tentativas || 0) + 1;
       if (tentativas > FILA_MAX_TENTATIVAS) {
         // Após N tentativas sem sucesso: move para fila de falhas permanentes
@@ -1633,6 +1668,7 @@ async function _sincronizarFilaImpl(manual){
         // se perdeu seria o operador notar este toast e relatar manualmente. Fire-and-forget:
         // não bloqueia o fluxo nem depende da resposta.
         fetch(API+'?action=notificarFalhaPermanente&item='+encodeURIComponent(JSON.stringify(itemFalho))).catch(()=>{});
+        resultados.set(id, 'remover');
         continue;
       }
       try{
@@ -1642,6 +1678,7 @@ async function _sincronizarFilaImpl(manual){
         const d=await postAPI(itemSemMeta);
         if(d.success){
           sincronizados++;
+          resultados.set(id, 'remover');
         } else if (d.semAberto && TIPOS_FECHAMENTO_FILA.includes(item.tipoApontamento)) {
           // Servidor não encontrou abertura correspondente para este fechamento — isso pode
           // significar duas coisas bem diferentes: (a) já foi aplicado numa tentativa anterior
@@ -1654,23 +1691,41 @@ async function _sincronizarFilaImpl(manual){
           if (confirmacao === true) {
             console.log('AGRICEF: fechamento já aplicado anteriormente (confirmado no servidor), removendo da fila', item);
             sincronizados++;
+            resultados.set(id, 'remover');
           } else {
             // confirmacao === false (genuinamente não registrado) ou null (erro ao verificar,
             // incerto) — em ambos os casos mantém na fila para não arriscar perda de dado real.
             console.warn('AGRICEF: fechamento sem abertura correspondente E não confirmado como já registrado — mantendo na fila', item, 'confirmacao:', confirmacao);
-            nova.push({...item, _tentativas: tentativas});
+            resultados.set(id, {...item, _tentativas: tentativas});
           }
         } else {
-          nova.push({...item, _tentativas: tentativas});
+          resultados.set(id, {...item, _tentativas: tentativas});
         }
       } catch{
-        nova.push({...item, _tentativas: tentativas});
+        resultados.set(id, {...item, _tentativas: tentativas});
       }
     }
-    localStorage.setItem('agricef_fila',JSON.stringify(nova));
+
+    // Merge seguro: relê o estado ATUAL do localStorage (pode ter itens novos adicionados
+    // durante o loop acima) e aplica os resultados por identidade — nunca sobrescreve cego.
+    const filaAtual = JSON.parse(localStorage.getItem('agricef_fila')||'[]');
+    const filaFinal = [];
+    const idsProcessados = new Set(resultados.keys());
+    for (const item of filaAtual) {
+      const id = _idItemFila(item);
+      if (!idsProcessados.has(id)) {
+        filaFinal.push(item); // item novo, intocado por esta sincronização — preserva
+        continue;
+      }
+      const resultado = resultados.get(id);
+      if (resultado !== 'remover') filaFinal.push(resultado); // continua na fila, tentativas atualizadas
+      // 'remover': sincronizado ou movido para falhas permanentes — não entra na fila final
+    }
+
+    localStorage.setItem('agricef_fila',JSON.stringify(filaFinal));
     atualizarBadgeFila();
     if(sincronizados > 0) showToast(sincronizados+' apontamento(s) sincronizado(s) com sucesso ✓','success');
-    else if(manual && nova.length > 0) showToast('Servidor indisponível — apontamentos mantidos na fila','error');
+    else if(manual && filaFinal.length > 0) showToast('Servidor indisponível — apontamentos mantidos na fila','error');
   }
 }
 
