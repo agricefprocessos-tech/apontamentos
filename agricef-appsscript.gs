@@ -6992,3 +6992,42 @@ function localizarLinhasPorIdentificadores(identifiers, deletar) {
   };
 }
 
+
+// ================================================================
+// DIAGNÓSTICO PONTUAL (auditoria pós-deploy v4.4): lista todas as linhas cruas de
+// Saldo_Parcial cujo NrSerie ou CodItem batem no filtro — usado para investigar
+// duplicatas legadas encontradas no filtro dono-only. Somente leitura.
+// ================================================================
+function _diagSaldo(filtroSerie, filtroItem) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_SALDO);
+  const dados = aba.getDataRange().getValues();
+  const out = [];
+  for (let i = 1; i < dados.length; i++) {
+    const r = dados[i];
+    if ((filtroSerie && String(r[0]).includes(filtroSerie)) || (filtroItem && String(r[1]).includes(filtroItem))) {
+      out.push({ linha: i+1, nrSerie: r[0], codItem: r[1], operacao: r[2], qtd: r[3], ultimaAtualizacao: r[4], abertoId: r[5], operadorCod: r[6], qtdPlTotal: r[7], isLote: r[8] });
+    }
+  }
+  Logger.log(JSON.stringify(out, null, 2));
+  return out;
+}
+function _diag509126() { return _diagSaldo('22000086', '509126'); }
+
+// Remove uma linha específica de Saldo_Parcial pelo abertoId — usado para limpar resíduos
+// órfãos (abertoId fantasma, sem par em Abertos/Respostas) encontrados na auditoria pós-v4.4.
+function _removerSaldoPorAbertoId(abertoId) {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_SALDO);
+  const dados = aba.getDataRange().getValues();
+  let removidas = 0;
+  for (let i = dados.length - 1; i >= 1; i--) {
+    if (String(dados[i][5] || '').trim() === abertoId) {
+      aba.deleteRow(i + 1);
+      removidas++;
+    }
+  }
+  Logger.log(removidas + ' linha(s) removida(s) de Saldo_Parcial para abertoId=' + abertoId);
+  return removidas;
+}
+function _removerTesteBlindagem() { return _removerSaldoPorAbertoId('AP-B2B2E2D95F'); }
