@@ -1209,7 +1209,10 @@ async function verificarLotesPendentes() {
   const box = document.getElementById('blocoLotesPendentes');
   if (!box) return;
   try {
-    const r = await fetch(API + '?action=verificarSaldoLotes&_=' + Date.now());
+    // operador: o backend filtra os saldos pendentes pelo dono (regra dono-only) — sem isso
+    // o operador veria lotes de colegas. state.operador já está setado ao entrar no modo lote.
+    if (!state.operador) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const r = await fetch(API + '?action=verificarSaldoLotes&operador=' + encodeURIComponent(state.operador) + '&_=' + Date.now());
     const data = await r.json();
     if (!data.success || !Array.isArray(data.lotes) || data.lotes.length === 0) {
       box.style.display = 'none'; box.innerHTML = ''; return;

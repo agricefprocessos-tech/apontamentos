@@ -100,12 +100,38 @@ const OPERACOES = {
 // ENTRY POINTS
 // ================================================================
 
+// ================================================================
+// AUTORIZAÇÃO DE ADMINISTRAÇÃO
+// A chave que libera as ações de manutenção/destrutivas é lida do PropertiesService
+// (fora do código-fonte). Se ainda não configurada, cai no valor histórico 'AGF2026'
+// para não quebrar URLs e triggers existentes durante a transição.
+// Para rotacionar a chave (recomendado): no editor GAS execute uma vez —
+//   PropertiesService.getScriptProperties().setProperty('ADMIN_KEY', 'SUA_NOVA_CHAVE');
+// e atualize as URLs/gatilhos que usam key=... . Depois disso, o valor 'AGF2026' deixa
+// de funcionar automaticamente (o fallback só vale enquanto a propriedade não existe).
+// ================================================================
+function _adminKey_() {
+  try {
+    const k = PropertiesService.getScriptProperties().getProperty('ADMIN_KEY');
+    if (k) return k;
+  } catch (e) { /* PropertiesService indisponível — usa fallback histórico */ }
+  return 'AGF2026';
+}
+function _adminAutorizado(keyRecebida) {
+  return String(keyRecebida == null ? '' : keyRecebida) === _adminKey_();
+}
+function configurarAdminKey(novaChave) {
+  // Utilitário one-shot: define a chave de admin no PropertiesService.
+  PropertiesService.getScriptProperties().setProperty('ADMIN_KEY', String(novaChave || '').trim());
+  return 'ADMIN_KEY configurada.';
+}
+
 function doGet(e) {
   const action = e.parameter.action || '';
 
   if (action === 'verificarAberto')  return verificarAberto(e.parameter.operador, e.parameter.implemento);
   if (action === 'verificarSaldo')    return verificarSaldoParcialAction(e.parameter.nrSerie, e.parameter.codItem || '', e.parameter.operacao);
-  if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction();
+  if (action === 'verificarSaldoLotes') return verificarSaldoLotesAction(e.parameter.operador);
   if (action === 'verificarFechamentoRegistrado') return verificarFechamentoRegistradoAction(e.parameter.abertoId, e.parameter.tipo);
   if (action === 'notificarFalhaPermanente') return notificarFalhaPermanenteAction(e.parameter.item);
   if (action === 'getJustificativasAuditoria') return getJustificativasAuditoriaAction();
@@ -115,7 +141,7 @@ function doGet(e) {
   if (action === 'getAbertos')       return getAbertosAction();
   if (action === 'getData')          return getDadosRespostas();
   if (action === 'getAnaliseIA')     return getAnaliseIAAction();
-  if (action === 'triggerRelatorio' && e.parameter.key === 'AGF2026') {
+  if (action === 'triggerRelatorio' && _adminAutorizado(e.parameter.key)) {
     try {
       enviarRelatorioSemanal();
       return jsonResponse({ success: true, message: 'Relatório semanal enviado para ' + EMAIL_RELATORIO });
@@ -123,7 +149,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'triggerDiario' && e.parameter.key === 'AGF2026') {
+  if (action === 'triggerDiario' && _adminAutorizado(e.parameter.key)) {
     try {
       enviarRelatorioDiario();
       return jsonResponse({ success: true, message: 'Relatório diário enviado para ' + EMAIL_RELATORIO });
@@ -131,7 +157,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'ativarTrigger' && e.parameter.key === 'AGF2026') {
+  if (action === 'ativarTrigger' && _adminAutorizado(e.parameter.key)) {
     try {
       criarTriggerRelatorioSemanal();
       return jsonResponse({ success: true, message: 'Trigger semanal criado com sucesso.' });
@@ -139,7 +165,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'ativarTriggerDiario' && e.parameter.key === 'AGF2026') {
+  if (action === 'ativarTriggerDiario' && _adminAutorizado(e.parameter.key)) {
     try {
       criarTriggerRelatorioDiario();
       return jsonResponse({ success: true, message: 'Trigger diário criado (seg–sex 07h).' });
@@ -147,7 +173,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'ativarTodosTriggers' && e.parameter.key === 'AGF2026') {
+  if (action === 'ativarTodosTriggers' && _adminAutorizado(e.parameter.key)) {
     try {
       criarTriggerRelatorioSemanal();
       criarTriggerRelatorioDiario();
@@ -156,7 +182,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'reconstruirAbertos' && e.parameter.key === 'AGF2026') {
+  if (action === 'reconstruirAbertos' && _adminAutorizado(e.parameter.key)) {
     try {
       const result = reconstruirAbertos();
       return jsonResponse({ success: true, ...result });
@@ -164,7 +190,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'ativarTriggerReconciliacao' && e.parameter.key === 'AGF2026') {
+  if (action === 'ativarTriggerReconciliacao' && _adminAutorizado(e.parameter.key)) {
     try {
       criarTriggerReconciliacaoAbertos();
       return jsonResponse({ success: true, message: 'Trigger de reconciliação criado: reconstruirAbertos a cada 30 minutos.' });
@@ -172,7 +198,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'normalizarOperadores' && e.parameter.key === 'AGF2026') {
+  if (action === 'normalizarOperadores' && _adminAutorizado(e.parameter.key)) {
     try {
       const total = normalizarCodigosOperador();
       return jsonResponse({ success: true, message: total + ' código(s) normalizado(s) com sucesso.' });
@@ -180,7 +206,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'normalizarRespostas' && e.parameter.key === 'AGF2026') {
+  if (action === 'normalizarRespostas' && _adminAutorizado(e.parameter.key)) {
     try {
       const total = normalizarRespostasColB();
       return jsonResponse({ success: true, message: total + ' registro(s) da aba Respostas normalizado(s).' });
@@ -188,7 +214,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'normalizarDatas' && e.parameter.key === 'AGF2026') {
+  if (action === 'normalizarDatas' && _adminAutorizado(e.parameter.key)) {
     try {
       const total = normalizarDatasColA();
       return jsonResponse({ success: true, message: total + ' data(s) normalizada(s) na coluna A.' });
@@ -196,7 +222,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'normalizarTodos' && e.parameter.key === 'AGF2026') {
+  if (action === 'normalizarTodos' && _adminAutorizado(e.parameter.key)) {
     try {
       const result = normalizarTodosDados();
       return jsonResponse({ success: true, message: result.datas + ' data(s) + ' + result.operadores + ' operador(es) normalizados. Total: ' + result.total, detail: result });
@@ -204,7 +230,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'limparTestes' && e.parameter.key === 'AGF2026') {
+  if (action === 'limparTestes' && _adminAutorizado(e.parameter.key)) {
     try {
       const total = limparRegistrosTeste();
       return jsonResponse({ success: true, message: total + ' linha(s) de teste removida(s).' });
@@ -212,7 +238,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'limparStressTest' && e.parameter.key === 'AGF2026') {
+  if (action === 'limparStressTest' && _adminAutorizado(e.parameter.key)) {
     try {
       const dryRun = e.parameter.dryRun !== 'false';
       return jsonResponse(limparDadosStressTest(dryRun));
@@ -220,35 +246,35 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'removerSemTimestamp' && e.parameter.key === 'AGF2026') {
+  if (action === 'removerSemTimestamp' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(removerRegistrosSemTimestamp());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'reverterTimestamps' && e.parameter.key === 'AGF2026') {
+  if (action === 'reverterTimestamps' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(reverterTimestampsInterpolados());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'preencherTimestamps' && e.parameter.key === 'AGF2026') {
+  if (action === 'preencherTimestamps' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(preencherTimestampsVazios());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'listarRevisoes' && e.parameter.key === 'AGF2026') {
+  if (action === 'listarRevisoes' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(listarRevisoesPlanilha());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'recuperarTimestamps' && e.parameter.key === 'AGF2026') {
+  if (action === 'recuperarTimestamps' && _adminAutorizado(e.parameter.key)) {
     try {
       const revId = e.parameter.revId || '';
       if (!revId) return jsonResponse({ success: false, message: 'Parâmetro revId obrigatório.' });
@@ -257,7 +283,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'aplicarTimestamps' && e.parameter.key === 'AGF2026') {
+  if (action === 'aplicarTimestamps' && _adminAutorizado(e.parameter.key)) {
     try {
       const revId = e.parameter.revId || '';
       if (!revId) return jsonResponse({ success: false, message: 'Parâmetro revId obrigatório.' });
@@ -266,7 +292,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'removerRegistroPorId' && e.parameter.key === 'AGF2026') {
+  if (action === 'removerRegistroPorId' && _adminAutorizado(e.parameter.key)) {
     try {
       const idAlvo = e.parameter.id || '';
       if (!idAlvo) return jsonResponse({ success: false, message: 'Parâmetro id obrigatório.' });
@@ -276,7 +302,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'removerPorCarimboECodItem' && e.parameter.key === 'AGF2026') {
+  if (action === 'removerPorCarimboECodItem' && _adminAutorizado(e.parameter.key)) {
     try {
       const carimbo = e.parameter.carimbo || '';
       const codItem = e.parameter.codItem || '';
@@ -287,7 +313,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'diagRespostas' && e.parameter.key === 'AGF2026') {
+  if (action === 'diagRespostas' && _adminAutorizado(e.parameter.key)) {
     try {
       const ss2 = SpreadsheetApp.openById(SPREADSHEET_ID);
       const aba2 = ss2.getSheetByName(ABA_RESPOSTAS);
@@ -307,28 +333,28 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'analyzeOrphans' && e.parameter.key === 'AGF2026') {
+  if (action === 'analyzeOrphans' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(analisarOrfaos());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'analisarInconsistencias' && e.parameter.key === 'AGF2026') {
+  if (action === 'analisarInconsistencias' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(analisarInconsistencias());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'impactoOrfaos' && e.parameter.key === 'AGF2026') {
+  if (action === 'impactoOrfaos' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(impactoOrfaos());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'marcarLegado' && e.parameter.key === 'AGF2026') {
+  if (action === 'marcarLegado' && _adminAutorizado(e.parameter.key)) {
     try {
       const cutoff = e.parameter.cutoff || '';
       const result = marcarOrfaosLegado(cutoff);
@@ -337,7 +363,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'previewAberturasOrfas' && e.parameter.key === 'AGF2026') {
+  if (action === 'previewAberturasOrfas' && _adminAutorizado(e.parameter.key)) {
     try {
       const cutoff = e.parameter.cutoff || '2026-05-29';
       return jsonResponse(previewAberturasOrfas(cutoff));
@@ -345,7 +371,7 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'deletarAberturasOrfas' && e.parameter.key === 'AGF2026') {
+  if (action === 'deletarAberturasOrfas' && _adminAutorizado(e.parameter.key)) {
     try {
       const cutoff = e.parameter.cutoff || '2026-05-29';
       return jsonResponse(deletarAberturasOrfas(cutoff));
@@ -365,15 +391,15 @@ function doGet(e) {
       if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
       if (payload.action === 'removerOperacao')  return removerOperacao(payload);
       // Localizar linhas por identificadores (func+ts) para deleção
-      if (payload.action === 'localizarLinhas' && payload.key === 'AGF2026') {
+      if (payload.action === 'localizarLinhas' && _adminAutorizado(payload.key)) {
         return jsonResponse(localizarLinhasPorIdentificadores(payload.identifiers || [], payload.deletar === true));
       }
       // Deletar linhas por número (mais preciso que func+ts)
-      if (payload.action === 'deletarPorLinhas' && payload.key === 'AGF2026') {
+      if (payload.action === 'deletarPorLinhas' && _adminAutorizado(payload.key)) {
         return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, payload.tiposPermitidos || null));
       }
       // Endpoint dedicado: deletar FECHAMENTOs sem ABERTURA (aceita apenas tipo FECHAMENTO)
-      if (payload.action === 'deletarFechamentosOrfaos' && payload.key === 'AGF2026') {
+      if (payload.action === 'deletarFechamentosOrfaos' && _adminAutorizado(payload.key)) {
         return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, ['FECHAMENTO']));
       }
       if (payload.action === 'editarApontamento') {
@@ -388,14 +414,14 @@ function doGet(e) {
     }
   }
 
-  if (action === 'smokeTest' && e.parameter.key === 'AGF2026') {
+  if (action === 'smokeTest' && _adminAutorizado(e.parameter.key)) {
     try {
       return jsonResponse(smokeTest());
     } catch(err) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
-  if (action === 'forceMatchOrfaos' && e.parameter.key === 'AGF2026') {
+  if (action === 'forceMatchOrfaos' && _adminAutorizado(e.parameter.key)) {
     try {
       const dryRun  = e.parameter.dryRun !== 'false';   // default: true (seguro)
       const cutoff  = e.parameter.cutoff || '2026-06-08';
@@ -405,7 +431,7 @@ function doGet(e) {
     }
   }
 
-  if (action === 'excluirFechamentosOrfaos' && e.parameter.key === 'AGF2026') {
+  if (action === 'excluirFechamentosOrfaos' && _adminAutorizado(e.parameter.key)) {
     try {
       const dryRun = e.parameter.dryRun !== 'false';
       return jsonResponse(excluirFechamentosOrfaos(dryRun));
@@ -414,7 +440,7 @@ function doGet(e) {
     }
   }
 
-  if (action === 'excluirAberturasOrfas' && e.parameter.key === 'AGF2026') {
+  if (action === 'excluirAberturasOrfas' && _adminAutorizado(e.parameter.key)) {
     try {
       const dryRun = e.parameter.dryRun !== 'false';
       return jsonResponse(excluirAberturasOrfas(dryRun));
@@ -440,17 +466,17 @@ function doPost(e) {
     if (payload.action === 'removerSerie')     return removerSerie(payload);
     if (payload.action === 'salvarOperacao')   return salvarOperacao(payload);
     if (payload.action === 'removerOperacao')  return removerOperacao(payload);
-    if (payload.action === 'localizarLinhas' && payload.key === 'AGF2026') {
+    if (payload.action === 'localizarLinhas' && _adminAutorizado(payload.key)) {
       return jsonResponse(localizarLinhasPorIdentificadores(payload.identifiers || [], payload.deletar === true));
     }
-    if (payload.action === 'deletarPorLinhas' && payload.key === 'AGF2026') {
+    if (payload.action === 'deletarPorLinhas' && _adminAutorizado(payload.key)) {
       return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, payload.tiposPermitidos || null));
     }
-    if (payload.action === 'deletarFechamentosOrfaos' && payload.key === 'AGF2026') {
+    if (payload.action === 'deletarFechamentosOrfaos' && _adminAutorizado(payload.key)) {
       return jsonResponse(deletarLinhasPorNumero(payload.rows || [], payload.dryRun === true, ['FECHAMENTO']));
     }
     // Fix#ID-LINK: endpoint de migração histórica — escreve abertoId em linhas específicas
-    if (payload.action === 'migrarIds' && payload.key === 'AGF2026') {
+    if (payload.action === 'migrarIds' && _adminAutorizado(payload.key)) {
       return jsonResponse(migrarIdsHistoricos(payload.updates || []));
     }
     return gravarApontamento(payload);
@@ -1471,47 +1497,43 @@ function gravarApontamento(payload) {
     // ---------------------------------------------------------------
     if (tipo === 'FECHAMENTO') {
       const qtdPl = Number(payload.qtdPlanejada || 0);
-      const qtdRe = (payload.quantidade === '' || payload.quantidade === null || payload.quantidade === undefined)
-        ? 0 : Number(payload.quantidade);
 
-      // Atualiza saldo sempre que houver série — a função cuida de saldo acumulado vs. primeiro ciclo
-      const abaSaldo   = garantirAbaSaldo(ss);
       const opCod      = String(payload.operacao || '').substring(0, 4);
       const codItemKey = String(payload.codItem || '').trim();
-
-      const abertoIdPayload = String(payload.abertoId || '').trim();
-
       const operadorNormSaldo = normalizarCodigoOp(payload.operador || '');
 
+      // Saldo por REPLAY determinístico (não por delta): recalcularSaldoParcial reconstrói o
+      // saldo de cada chave (NrSerie+CodItem+Operacao) a partir de TODOS os FECHAMENTOs em
+      // Respostas, em ordem cronológica. Isso é idempotente por construção — se por qualquer
+      // motivo esta gravação for reprocessada, o saldo continua correto (não baixa em dobro),
+      // eliminando a classe de bugs de drift/baixa-dobrada do método delta anterior.
+      // As linhas de FECHAMENTO desta chamada já foram commitadas (flush acima), então a leitura
+      // fresca de Respostas abaixo já as inclui.
+      const abaReSaldo = ss.getSheetByName(ABA_RESPOSTAS);
+      const dadosReFresh = abaReSaldo ? abaReSaldo.getDataRange().getValues() : null;
+
       if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
-        // LOTE: atualiza saldo APENAS das séries sendo fechadas agora (payload.loteSeries).
-        // Iteramos payload.loteSeries — não loteSeriesFechamento (que inclui todas as originais).
-        // Séries não presentes neste fechamento não devem receber registro de saldo ainda.
-        // qtdPlTotalLote usa todas as originais para registrar o planejamento completo do lote.
+        // LOTE: recalcula saldo APENAS das séries fechadas agora (payload.loteSeries).
+        // qtdPlanejadaTotal = planejado do lote inteiro (rastreabilidade/label na tela).
         const qtdPlTotalLote = loteSeriesFechamento.reduce((s, x) => s + (Number(x.qtdPlanejada) || 0), 0);
         for (const item of payload.loteSeries) {
           const nrSerieItem = String(item.nrSerie || '').trim();
-          const efetivo = loteQtdPorSerieMap && loteQtdPorSerieMap[nrSerieItem];
-          if (!efetivo) continue; // segurança: nunca deveria ocorrer, mas evita saldo fantasma
-          atualizarSaldoParcial(
-            abaSaldo,
-            nrSerieItem,
-            codItemKey,
-            opCod,
-            efetivo.qtdPlanejada,
-            efetivo.qtdRealizada,
-            carimbo,
-            abertoIdPayload,
-            operadorNormSaldo,
-            qtdPlTotalLote,
-            true
-          );
+          if (!nrSerieItem) continue;
+          recalcularSaldoParcial(nrSerieItem, codItemKey, opCod, dadosReFresh, {
+            operadorCod: operadorNormSaldo,
+            qtdPlanejadaTotal: qtdPlTotalLote,
+            isLote: true,
+          });
         }
       } else {
         // Série única
         const nrSerieKey = String(payload.nrSerie || '').trim();
         if (nrSerieKey) {
-          atualizarSaldoParcial(abaSaldo, nrSerieKey, codItemKey, opCod, qtdPl, qtdRe, carimbo, abertoIdPayload, operadorNormSaldo, qtdPl, false);
+          recalcularSaldoParcial(nrSerieKey, codItemKey, opCod, dadosReFresh, {
+            operadorCod: operadorNormSaldo,
+            qtdPlanejadaTotal: qtdPl,
+            isLote: false,
+          });
         }
       }
     }
@@ -2157,6 +2179,11 @@ function garantirAbaAnaliseIA(ss) {
 // abertoId (opcional): só rastreabilidade — não faz parte da chave de busca (NrSerie+CodItem+
 // Operacao continua sendo a chave, como sempre foi), grava o abertoId da abertura que gerou
 // este saldo para permitir agrupar saldos pendentes por lote de origem.
+//
+// ⚠️ DEPRECADO (v4.4): o fluxo de fechamento passou a usar recalcularSaldoParcial (replay
+// determinístico de todos os FECHAMENTOs em Respostas), que é idempotente e não sofre de
+// drift/baixa-dobrada como este método por delta. Mantido apenas como referência histórica —
+// não há mais chamadas. Não reintroduzir sem entender que o replay é a fonte de verdade.
 function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qtdRealizada, carimbo, abertoId, operadorCod, qtdPlanejadaTotal, isLote) {
   const dados = aba.getDataRange().getValues();
   const codItemNorm = String(codItem || '').trim();
@@ -2228,7 +2255,7 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
 // (pós-edição/remoção) da planilha. Quando fornecido, evita uma releitura completa
 // redundante — usado por editarApontamento e removerRegistroPorAbertoId, que já têm
 // os dados em memória no momento em que chamam esta função.
-function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado) {
+function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado, opts) {
   if (!nrSerie || !codItem) return;
   const ss      = SpreadsheetApp.openById(SPREADSHEET_ID);
   const abaSaldo = garantirAbaSaldo(ss);
@@ -2249,21 +2276,41 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
     if (!mesmoOperador(serieLinha, nrSerie)) continue;
     if (itemLinha !== codItemNorm) continue;
     if (!mesmoOperador(opLinha, operacao)) continue;
+    // OperadorCod: Respostas col B guarda o NOME completo ("000117 - RAFAEL..."); extraímos o
+    // primeiro grupo de dígitos (o código) e normalizamos. Necessário para o filtro dono-only
+    // de verificarSaldoLotesAction funcionar também nos saldos gerados por replay.
+    const nomeOpLinha = String(dadosRe[i][COL_RE.OPERADOR] || '');
+    const mCod = nomeOpLinha.match(/\d+/);
     eventos.push({
       qtdPlanejada: Number(dadosRe[i][COL_RE.QTD_PLANEJADA]) || 0,
       qtdRealizada: Number(dadosRe[i][COL_RE.QTD]) || 0,
       carimbo: dadosRe[i][COL_RE.CARIMBO],
       abertoId: String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim(),
+      operadorCod: mCod ? normalizarCodigoOp(mCod[0]) : '',
     });
   }
 
   let saldo = null;
   let ultimoCarimbo = '';
   let ultimoAbertoId = '';
+  let ultimoOperador = '';
+  let baseQtdPlanejada = null;
   eventos.forEach(ev => {
-    saldo = (saldo === null) ? Math.max(0, ev.qtdPlanejada - ev.qtdRealizada) : Math.max(0, saldo - ev.qtdRealizada);
+    // Regra "re-baseia ao zerar": um novo fechamento cujo ciclo anterior já foi concluído
+    // (saldo == 0) inicia um NOVO ciclo de produção — recomeça do plano DELE, não subtrai de 0.
+    // Sem isto, reabrir uma série já concluída (H2.2) com um plano novo daria saldo errado,
+    // pois o replay só olharia o plano do primeiro fechamento. Com a regra, o replay reproduz
+    // exatamente o comportamento do método delta (que zerava removendo a linha), porém de forma
+    // determinística e idempotente — reprocessar a mesma gravação nunca baixa o saldo em dobro.
+    if (saldo === null || saldo <= 0) {
+      saldo = Math.max(0, ev.qtdPlanejada - ev.qtdRealizada);
+      baseQtdPlanejada = ev.qtdPlanejada;
+    } else {
+      saldo = Math.max(0, saldo - ev.qtdRealizada);
+    }
     ultimoCarimbo = ev.carimbo;
     ultimoAbertoId = ev.abertoId;
+    if (ev.operadorCod) ultimoOperador = ev.operadorCod;
   });
 
   const dadosSaldo = abaSaldo.getDataRange().getValues();
@@ -2273,9 +2320,14 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado)
     }
   }
   if (saldo !== null && saldo > 0) {
-    // Colunas 7-9 (OperadorCod, QtdPlanejadaTotal, IsLote) não estão disponíveis no replay —
-    // são preenchidas via atualizarSaldoParcial no fluxo normal de fechamento.
-    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId, '', '', '']);
+    // OperadorCod/QtdPlanejadaTotal/IsLote: derivados do replay (operador do último evento,
+    // planejado do primeiro ciclo). O caller pode sobrescrever via opts quando tiver o valor
+    // exato (ex.: fechamento de lote informa qtdPlanejadaTotal do lote inteiro e isLote=true).
+    const operadorCod = (opts && opts.operadorCod) || ultimoOperador || '';
+    const qtdPlTotal  = (opts && opts.qtdPlanejadaTotal != null) ? opts.qtdPlanejadaTotal
+                       : (baseQtdPlanejada != null ? baseQtdPlanejada : '');
+    const isLoteFlag  = (opts && opts.isLote != null) ? (opts.isLote ? 'Sim' : 'Não') : '';
+    abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId, operadorCod, qtdPlTotal, isLoteFlag]);
   }
 }
 
@@ -2390,7 +2442,7 @@ function getJustificativasAuditoriaAction() {
 }
 
 function salvarJustificativaAuditoriaAction(payload) {
-  if (payload.key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  if (!_adminAutorizado(payload.key)) return jsonResponse({ success: false, message: 'Não autorizado.' });
   const chave = String(payload.chave || '').trim();
   const justificativa = String(payload.justificativa || '').trim();
   if (!chave) return jsonResponse({ success: false, message: 'Chave é obrigatória.' });
@@ -2429,7 +2481,7 @@ function salvarJustificativaAuditoriaAction(payload) {
 // Permite desfazer uma justificativa (ex: líder digitou errado, ou quer que o item volte a
 // contar como inconsistência ativa). Não exposta na UI ainda — uso administrativo via URL.
 function removerJustificativaAuditoriaAction(chave, key) {
-  if (key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  if (!_adminAutorizado(key)) return jsonResponse({ success: false, message: 'Não autorizado.' });
   const chaveAlvo = String(chave || '').trim();
   if (!chaveAlvo) return jsonResponse({ success: false, message: 'Chave é obrigatória.' });
   try {
@@ -2458,7 +2510,7 @@ function removerJustificativaAuditoriaAction(chave, key) {
 // já tinha sido fechado em partes antes deste fechamento, isso precisa ser resolvido manual).
 // ================================================================
 function desfazerFechamentoAction(abertoId, key) {
-  if (key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  if (!_adminAutorizado(key)) return jsonResponse({ success: false, message: 'Não autorizado.' });
   const idAlvo = String(abertoId || '').trim();
   if (!idAlvo) return jsonResponse({ success: false, message: 'abertoId é obrigatório.' });
 
@@ -2611,23 +2663,64 @@ function verificarSaldoParcialAction(nrSerie, codItem, operacao) {
 // desta coluna existir, continuam funcionando no fluxo de série única — não aparecem
 // aqui, mas também não quebram nada).
 // ================================================================
-function verificarSaldoLotesAction() {
+// Retorna os lotes/séries com saldo pendente PERTENCENTES ao operador informado.
+// Regra confirmada (dono-only): cada operador só vê e reabre os próprios saldos pendentes —
+// evita que o saldo de um colega apareça na tela de quem não abriu o apontamento.
+// Filtro: coluna 6 (OperadorCod) do Saldo_Parcial. Saldos legados/replay podem ter OperadorCod
+// vazio (gravados antes desta coluna, ou por recalcularSaldoParcial em versões antigas); nesses
+// casos reconstruímos o dono via abertoId → aba Abertos. Se ainda assim não for possível
+// determinar o dono, o saldo é OMITIDO (fail-closed) — melhor não mostrar do que mostrar a quem
+// não é dono. Sem operador informado, retorna vazio (compatibilidade defensiva: nunca vaza tudo).
+function verificarSaldoLotesAction(operador) {
   try {
+    const operadorReq = normalizarCodigoOp(String(operador || '').trim());
+    if (!operadorReq) return jsonResponse({ success: true, lotes: [] });
+
     const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
     const aba = ss.getSheetByName(ABA_SALDO);
     if (!aba) return jsonResponse({ success: true, lotes: [] });
     const dados = aba.getDataRange().getValues();
+
+    // Índice abertoId → operadorCod, montado sob demanda a partir da aba Abertos para
+    // resolver o dono de saldos com OperadorCod vazio (legado). Lazy: só lê Abertos se preciso.
+    let mapaDonoPorAberto = null;
+    const donoDoAberto = (abertoId) => {
+      if (!abertoId) return '';
+      if (mapaDonoPorAberto === null) {
+        mapaDonoPorAberto = {};
+        try {
+          const abaAb = ss.getSheetByName(ABA_ABERTOS);
+          if (abaAb) {
+            const dadosAb = abaAb.getDataRange().getValues();
+            for (let j = 1; j < dadosAb.length; j++) {
+              const aid = String(dadosAb[j][COL_AB.ABERTO_ID] || '').trim();
+              if (aid) mapaDonoPorAberto[aid] = normalizarCodigoOp(String(dadosAb[j][COL_AB.OPERADOR] || ''));
+            }
+          }
+        } catch (e) { /* Abertos indisponível — mapaDonoPorAberto fica vazio */ }
+      }
+      return mapaDonoPorAberto[abertoId] || '';
+    };
+
     const porAbertoId = {};
     for (let i = 1; i < dados.length; i++) {
       const abertoId = String(dados[i][5] || '').trim();
       const qtd = Number(dados[i][3]) || 0;
       if (!abertoId || qtd <= 0) continue;
+
+      // Dono do saldo: preferir OperadorCod (col 6); se vazio, reconstruir via Abertos.
+      let donoCod = normalizarCodigoOp(String(dados[i][6] || '').trim());
+      if (!donoCod) donoCod = donoDoAberto(abertoId);
+      // Fail-closed: sem dono identificável, não mostra a ninguém.
+      if (!donoCod || !mesmoOperador(donoCod, operadorReq)) continue;
+
       if (!porAbertoId[abertoId]) {
         porAbertoId[abertoId] = {
           abertoId: abertoId,
           codItem: String(dados[i][1] || '').trim(),
           operacao: String(dados[i][2] || '').trim(),
           ultimaAtualizacao: String(dados[i][4] || ''),
+          isLote: String(dados[i][8] || '').trim().toLowerCase() === 'sim',
           series: [],
         };
       }
@@ -5191,7 +5284,7 @@ function removerRegistroPorCarimboECodItem(carimbo, codItem) {
 // compatibilidade com o resto do par/lote. Use com cuidado.
 // ================================================================
 function editarApontamento(payload) {
-  if (payload.key !== 'AGF2026') return jsonResponse({ success: false, message: 'Não autorizado.' });
+  if (!_adminAutorizado(payload.key)) return jsonResponse({ success: false, message: 'Não autorizado.' });
 
   // Perf: 20s (era 15s) — mesma margem aplicada em gravarApontamento, ver comentário lá.
   const lock = LockService.getScriptLock();
