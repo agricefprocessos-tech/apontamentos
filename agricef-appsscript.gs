@@ -212,6 +212,14 @@ function doGet(e) {
       return jsonResponse({ success: false, message: err.message });
     }
   }
+  if (action === 'limparStressTest' && e.parameter.key === 'AGF2026') {
+    try {
+      const dryRun = e.parameter.dryRun !== 'false';
+      return jsonResponse(limparDadosStressTest(dryRun));
+    } catch(err) {
+      return jsonResponse({ success: false, message: err.message });
+    }
+  }
   if (action === 'removerSemTimestamp' && e.parameter.key === 'AGF2026') {
     try {
       return jsonResponse(removerRegistrosSemTimestamp());
@@ -4929,6 +4937,122 @@ function limparRegistrosTeste() {
 
   Logger.log('🧹 Registros de teste removidos: ' + removidos + ' | Válidas mantidas: ' + (linhasValidas.length - 1));
   return removidos;
+}
+
+// ================================================================
+// LIMPAR DADOS DO STRESS TEST — remove linhas cujo codItem é claramente
+// sintético (TESTE-STRESS, TESTE-H1..H4, TESTE-I1, ITEM-ERRADO, X, etc.)
+// das abas Respostas, Saldo_Parcial, Abertos e IdempotencyLog.
+//
+// Modo dry-run (padrão): retorna contagens sem apagar nada.
+// Execute com dryRun=false para deletar de fato:
+//   ?action=limparStressTest&key=AGF2026&dryRun=false
+// ================================================================
+const CODITEM_TESTE_ = new Set([
+  'TESTE-STRESS', 'TESTE-DUP', 'TESTE-G5-SOLO',
+  'TESTE-H1', 'TESTE-H2', 'TESTE-H3', 'TESTE-H4', 'TESTE-I1',
+  'ITEM-ERRADO', 'X'
+]);
+
+// Wrappers sem argumentos para executar diretamente no editor GAS (sem deploy)
+function _limparStressDryRun() { Logger.log(JSON.stringify(limparDadosStressTest(true),  null, 2)); }
+function _limparStressExec()   { Logger.log(JSON.stringify(limparDadosStressTest(false), null, 2)); }
+
+function limparDadosStressTest(dryRun) {
+  dryRun = dryRun !== false; // padrão: dry-run
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const report = {
+    success: true, dryRun: dryRun,
+    respostas: 0, saldo: 0, abertos: 0, idempotency: 0,
+    amostras: []
+  };
+
+  function _reescrever(aba, dados, validas, campo) {
+    if (!dryRun && dados.length > validas.length) {
+      aba.clearContents();
+      aba.getRange(1, 1, validas.length, dados[0].length).setValues(validas);
+      SpreadsheetApp.flush();
+    }
+  }
+
+  // 1. Respostas — col E (índice 4) = CodItem
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  if (abaRe && abaRe.getLastRow() > 1) {
+    const dados = abaRe.getDataRange().getValues();
+    const validas = [dados[0]];
+    for (let i = 1; i < dados.length; i++) {
+      const cod = String(dados[i][COL_RE.COD_ITEM] || '').trim();
+      if (CODITEM_TESTE_.has(cod)) {
+        report.respostas++;
+        if (report.amostras.length < 5)
+          report.amostras.push('Respostas linha ' + (i+1) + ': ' + cod + ' / ' + String(dados[i][COL_RE.TIPO] || '') + ' / ' + String(dados[i][COL_RE.CARIMBO] || ''));
+      } else {
+        validas.push(dados[i]);
+      }
+    }
+    _reescrever(abaRe, dados, validas, 'Respostas');
+  }
+
+  // 2. Saldo_Parcial — col B (índice 1) = CodItem
+  const abaSaldo = ss.getSheetByName(ABA_SALDO);
+  if (abaSaldo && abaSaldo.getLastRow() > 1) {
+    const dados = abaSaldo.getDataRange().getValues();
+    const validas = [dados[0]];
+    for (let i = 1; i < dados.length; i++) {
+      const cod = String(dados[i][1] || '').trim(); // índice 1 = CodItem
+      if (CODITEM_TESTE_.has(cod)) {
+        report.saldo++;
+        if (report.amostras.length < 8)
+          report.amostras.push('Saldo linha ' + (i+1) + ': ' + String(dados[i][0]||'') + ' / ' + cod + ' / qtd=' + dados[i][3]);
+      } else {
+        validas.push(dados[i]);
+      }
+    }
+    _reescrever(abaSaldo, dados, validas, 'Saldo_Parcial');
+  }
+
+  // 3. Abertos — col F (índice 5 = COL_AB.COD_ITEM) = CodItem
+  const abaAb = ss.getSheetByName(ABA_ABERTOS);
+  if (abaAb && abaAb.getLastRow() > 1) {
+    const dados = abaAb.getDataRange().getValues();
+    const validas = [dados[0]];
+    for (let i = 1; i < dados.length; i++) {
+      const cod = String(dados[i][COL_AB.COD_ITEM] || '').trim();
+      if (CODITEM_TESTE_.has(cod)) {
+        report.abertos++;
+        if (report.amostras.length < 11)
+          report.amostras.push('Abertos linha ' + (i+1) + ': op=' + String(dados[i][COL_AB.OPERADOR]||'') + ' / ' + cod + ' / id=' + String(dados[i][COL_AB.ABERTO_ID]||''));
+      } else {
+        validas.push(dados[i]);
+      }
+    }
+    _reescrever(abaAb, dados, validas, 'Abertos');
+  }
+
+  // 4. IdempotencyLog — col B (índice 1) = responseJson (contém o codItem no payload)
+  const abaLog = ss.getSheetByName(ABA_IDEMPOTENCY);
+  if (abaLog && abaLog.getLastRow() > 1) {
+    const dados = abaLog.getDataRange().getValues();
+    const validas = [dados[0]];
+    for (let i = 1; i < dados.length; i++) {
+      const resp = String(dados[i][1] || '');
+      const isTest = resp.includes('TESTE-STRESS') || resp.includes('TESTE-DUP') ||
+                     resp.includes('TESTE-G5')    || resp.includes('TESTE-H')   ||
+                     resp.includes('TESTE-I1')    || resp.includes('ITEM-ERRADO');
+      if (isTest) {
+        report.idempotency++;
+      } else {
+        validas.push(dados[i]);
+      }
+    }
+    _reescrever(abaLog, dados, validas, 'IdempotencyLog');
+  }
+
+  report.totalLinhas = report.respostas + report.saldo + report.abertos + report.idempotency;
+  report.message = dryRun
+    ? 'DRY-RUN: ' + report.totalLinhas + ' linha(s) seriam removidas. Confirme com dryRun=false.'
+    : report.totalLinhas + ' linha(s) de teste removidas com sucesso.';
+  return report;
 }
 
 // ================================================================
