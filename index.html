@@ -223,6 +223,10 @@ label:first-child{margin-top:0}
       </button>
     </div>
 
+    <!-- AVISO ANTECIPADO: lote(s) com saldo pendente (versão informativa, sem ação —
+         o botão "Reabrir lote" funcional fica no Step 2, onde os campos de lote existem) -->
+    <div id="blocoLotesPendentesStep1" style="display:none;margin-top:10px"></div>
+
     <button class="btn-submit" onclick="irStep2()" id="btnContinuar">Continuar →</button>
   </div>
 
@@ -706,6 +710,9 @@ let _verificarDebounceTimer = null;
 function onOperadorChange() {
   document.getElementById('alertaAberto').classList.remove('visible');
   state.abertoInfo = null;
+  // Se "Lote" já estava selecionado e o operador muda, reavisa para o novo operador
+  // (o aviso é por dono — trocar de operador sem reconsultar mostraria o lote de outra pessoa).
+  if (state.modoLote) { avisarLotesPendentesStep1(); }
   // Debounce: aguarda 300ms antes de disparar a verificação
   clearTimeout(_verificarDebounceTimer);
   _verificarDebounceTimer = setTimeout(verificarAbertoSeCompleto, 300);
@@ -715,6 +722,11 @@ function onImplementoChange() {
   const val = document.getElementById('implemento').value;
   state.modoLote = (val === '__LOTE__');
   atualizarBotoesTipo();
+  if (state.modoLote) { avisarLotesPendentesStep1(); }
+  else {
+    const box = document.getElementById('blocoLotesPendentesStep1');
+    if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  }
 }
 
 async function verificarAbertoSeCompleto() {
@@ -1205,35 +1217,66 @@ async function verificarSaldoAPI(nrSerie, codItem, operacao) {
 // Ao entrar no modo lote, busca lotes com saldo pendente (de fechamentos parciais anteriores)
 // e oferece um atalho "Reabrir lote" que pré-seleciona as séries e a quantidade — em vez do
 // operador ter que lembrar quais séries faltam e calcular a quantidade restante manualmente.
+// Compartilhada entre o aviso do Step 1 (só leitura) e o card acionável do Step 2.
+async function _buscarLotesPendentes(operadorCod) {
+  if (!operadorCod) return [];
+  try {
+    // operador: o backend filtra os saldos pendentes pelo dono (regra dono-only) — sem isso
+    // o operador veria lotes de colegas.
+    const r = await fetch(API + '?action=verificarSaldoLotes&operador=' + encodeURIComponent(operadorCod) + '&_=' + Date.now());
+    const data = await r.json();
+    return (data.success && Array.isArray(data.lotes)) ? data.lotes : [];
+  } catch { return []; }
+}
+
+// Step 1 — aviso antecipado (sem botão de ação): mostra assim que o operador escolhe "Lote",
+// antes mesmo de decidir abertura/fechamento, para não abrir um lote novo sem perceber que já
+// tem um pendente. A reabertura de fato só acontece no Step 2 (campos de lote só existem lá).
+// Guarda contra race condition: se o operador mudar de novo antes da resposta anterior
+// chegar, a resposta desatualizada (ex: trocar 108→119 rápido, resposta de 108 chega depois
+// da de 119) seria aplicada por último e mostraria o lote errado. Só a chamada mais recente
+// pode escrever no box.
+let _avisoLotesStep1Token = 0;
+async function avisarLotesPendentesStep1() {
+  const box = document.getElementById('blocoLotesPendentesStep1');
+  if (!box) return;
+  const opSel = document.getElementById('operador');
+  const meuToken = ++_avisoLotesStep1Token;
+  const lotes = await _buscarLotesPendentes(opSel ? opSel.value : '');
+  if (meuToken !== _avisoLotesStep1Token) return; // resposta obsoleta — descarta
+  if (lotes.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.innerHTML = lotes.map(l => {
+    const detalhe = l.series.map(s => s.nrSerie+' ('+s.qtdRestante+' pç)').join(', ');
+    return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:8px;border:1px solid rgba(243,156,18,.4);background:rgba(243,156,18,.08);font-size:12px;line-height:1.4">
+      <strong>📦 Você tem um lote com saldo pendente</strong> · item ${l.codItem}<br>
+      ${detalhe}<br>
+      <span style="color:var(--text2)">Continue e escolha "Abertura" para retomá-lo.</span>
+    </div>`;
+  }).join('');
+  box.style.display = 'block';
+}
+
+// Step 2 — card acionável com botão "Reabrir lote" (pré-preenche séries e quantidade).
 async function verificarLotesPendentes() {
   const box = document.getElementById('blocoLotesPendentes');
   if (!box) return;
-  try {
-    // operador: o backend filtra os saldos pendentes pelo dono (regra dono-only) — sem isso
-    // o operador veria lotes de colegas. state.operador já está setado ao entrar no modo lote.
-    if (!state.operador) { box.style.display = 'none'; box.innerHTML = ''; return; }
-    const r = await fetch(API + '?action=verificarSaldoLotes&operador=' + encodeURIComponent(state.operador) + '&_=' + Date.now());
-    const data = await r.json();
-    if (!data.success || !Array.isArray(data.lotes) || data.lotes.length === 0) {
-      box.style.display = 'none'; box.innerHTML = ''; return;
-    }
-    window._lotesPendentesCache = data.lotes;
-    box.innerHTML = data.lotes.map(l => {
-      // Quantidades podem ser desiguais entre séries do mesmo lote (cada uma fecha com sua
-      // própria qtdRealizada) — lista cada série com seu restante específico, sem assumir igual.
-      const detalhe = l.series.map(s => s.nrSerie+' ('+s.qtdRestante+' pç)').join(', ');
-      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;margin-bottom:6px;border-radius:8px;border:1px solid rgba(243,156,18,.4);background:rgba(243,156,18,.08)">
-        <div style="font-size:12px;line-height:1.4">
-          <strong>📦 Lote com saldo pendente</strong> · item ${l.codItem}<br>
-          ${detalhe}
-        </div>
-        <button type="button" class="btn-secondary" style="padding:6px 10px;font-size:12px;white-space:nowrap;flex-shrink:0" onclick="reabrirLotePendente('${l.abertoId}')">Reabrir lote →</button>
-      </div>`;
-    }).join('');
-    box.style.display = 'block';
-  } catch {
-    box.style.display = 'none';
-  }
+  // state.operador já está setado ao entrar no modo lote (irStep2 já rodou).
+  const lotes = await _buscarLotesPendentes(state.operador);
+  if (lotes.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  window._lotesPendentesCache = lotes;
+  box.innerHTML = lotes.map(l => {
+    // Quantidades podem ser desiguais entre séries do mesmo lote (cada uma fecha com sua
+    // própria qtdRealizada) — lista cada série com seu restante específico, sem assumir igual.
+    const detalhe = l.series.map(s => s.nrSerie+' ('+s.qtdRestante+' pç)').join(', ');
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;margin-bottom:6px;border-radius:8px;border:1px solid rgba(243,156,18,.4);background:rgba(243,156,18,.08)">
+      <div style="font-size:12px;line-height:1.4">
+        <strong>📦 Lote com saldo pendente</strong> · item ${l.codItem}<br>
+        ${detalhe}
+      </div>
+      <button type="button" class="btn-secondary" style="padding:6px 10px;font-size:12px;white-space:nowrap;flex-shrink:0" onclick="reabrirLotePendente('${l.abertoId}')">Reabrir lote →</button>
+    </div>`;
+  }).join('');
+  box.style.display = 'block';
 }
 
 function reabrirLotePendente(abertoId) {
