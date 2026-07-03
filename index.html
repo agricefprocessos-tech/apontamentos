@@ -1242,6 +1242,12 @@ async function avisarLotesPendentesStep1() {
   if (!box) return;
   const opSel = document.getElementById('operador');
   const meuToken = ++_avisoLotesStep1Token;
+  // O backend (Apps Script) pode levar vários segundos para responder sob carga real de
+  // produção (múltiplos operadores concorrentes) — sem isso a tela ficava "parada" nesse
+  // meio tempo, parecendo travada. Mostra de imediato para o operador saber que está
+  // checando, em vez de aparecer do nada alguns segundos depois.
+  box.innerHTML = '<div style="padding:8px 10px;font-size:12px;color:var(--text2)">⏳ Verificando lotes pendentes…</div>';
+  box.style.display = 'block';
   const lotes = await _buscarLotesPendentes(opSel ? opSel.value : '');
   if (meuToken !== _avisoLotesStep1Token) return; // resposta obsoleta — descarta
   if (lotes.length === 0) { box.style.display = 'none'; box.innerHTML = ''; return; }
