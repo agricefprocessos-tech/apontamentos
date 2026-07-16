@@ -823,15 +823,26 @@ function voltarStep1() {
 
 function atualizarBotoesTipo() {
   const temAberto = !!state.abertoInfo;
+  // Fix#ParadaAninhada: "Início parada" pode ficar habilitado mesmo com algo já aberto,
+  // DESDE QUE o que estiver aberto seja aninhável (produção ou retrabalho) — permite pausar
+  // sem fechar. Se o que está aberto for uma parada (aninhada ou não), continua bloqueado:
+  // não é possível ter duas paradas ao mesmo tempo.
+  const tipoAbertoAtual  = temAberto ? String(state.abertoInfo.tipo || '') : '';
+  const paradaPodeAninhar = temAberto &&
+    (tipoAbertoAtual === 'ABERTURA' || tipoAbertoAtual === 'INÍCIO DE RETRABALHO');
+
   const tiposAbertura = ['ABERTURA','INICIO_RETRABALHO','INICIO_PARADA'];
   tiposAbertura.forEach(t => {
     const btn = document.getElementById('btn-'+t);
-    if (temAberto) {
+    const bloqueiaEste = temAberto && !(t === 'INICIO_PARADA' && paradaPodeAninhar);
+    if (bloqueiaEste) {
       btn.disabled = true;
       btn.title = 'Feche o apontamento em aberto primeiro';
     } else {
       btn.disabled = false;
-      btn.title = '';
+      btn.title = (t === 'INICIO_PARADA' && paradaPodeAninhar)
+        ? 'Pausa o apontamento aberto sem fechá-lo — retome depois de encerrar a parada'
+        : '';
     }
   });
 }

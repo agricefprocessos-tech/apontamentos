@@ -29,6 +29,7 @@ const ABA_OPERACOES   = 'Cadastro_Operacoes';
 const ABA_ANALISES_IA = 'Analises_IA';
 const ABA_JUSTIFICATIVAS = 'Justificativas_Auditoria';
 const ABA_IDEMPOTENCY    = 'IdempotencyLog';
+const ABA_PARADAS_ANINHADAS = 'Paradas_Aninhadas';
 
 // ================================================================
 // SCHEMA DE COLUNAS (0-indexed)
@@ -53,6 +54,9 @@ const COL_RE = {
   QTD_PLANEJADA:   14, // O  QTD PLANEJADA
   ABERTO_ID:       15, // P  ID (abertoId AP-XXXXXXXXXX)
   LOTE_SERIES:     16, // Q  LoteSeries JSON (ABERTURA de lote — para reconstrução do Abertos)
+  ABERTO_ID_PAI:   17, // R  AbertoId do apontamento (ABERTURA/INÍCIO DE RETRABALHO) que esta
+                       //    parada pausou, quando é uma PARADA ANINHADA. Vazio em qualquer
+                       //    outro tipo de linha (inclusive parada standalone, sem aninhamento).
 };
 
 const COL_AB = {
@@ -493,6 +497,35 @@ function doPost(e) {
 function verificarAberto(operador, implemento) {
   try {
     const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+    // Fix#ParadaAninhada: se o operador tem uma parada aninhada ativa, ela é o que precisa
+    // ser fechado AGORA (a ABERTURA/RETRABALHO pai está congelada, aguardando). Checa isso
+    // ANTES de Abertos — senão o operador veria a produção/retrabalho como "aberto" e
+    // tentaria fechá-la diretamente, o que o bloqueio em gravarApontamento rejeitaria mesmo
+    // assim, mas de forma confusa (sem explicar que precisa fechar a parada primeiro).
+    const abaParadasAnVerif = garantirAbaParadasAninhadas(ss);
+    const dadosParadasAnVerif = abaParadasAnVerif.getDataRange().getValues();
+    for (let i = 1; i < dadosParadasAnVerif.length; i++) {
+      const rowPa = dadosParadasAnVerif[i];
+      if (!rowPa[0] || !mesmoOperador(rowPa[0], operador)) continue;
+      return jsonResponse({
+        aberto:        true,
+        tipo:          'INÍCIO DE PARADA',
+        operacao:      String(rowPa[5] || ''), // TipoParada
+        carimbo:       formatarCarimboGs(rowPa[6]),
+        codItem:       String(rowPa[8] || ''), // CodItemPai (contexto)
+        qtdPlanejada:  '',
+        nrSerie:       String(rowPa[7] || ''), // NrSeriePai (contexto)
+        implemento:    '',
+        cliente:       '',
+        operadorNome:  String(rowPa[1] || ''),
+        loteSeries:    null,
+        abertoId:      String(rowPa[4] || '').trim(), // AbertoIdParada — usado no TERMINO_PARADA
+        paradaAninhada: true,
+        abertoIdPai:   String(rowPa[2] || '').trim(),
+      });
+    }
+
     const aba   = garantirAbaAbertos(ss);
     const dados = aba.getDataRange().getValues();
 
@@ -573,7 +606,7 @@ function verificarAberto(operador, implemento) {
 
     return jsonResponse({ aberto: false });
   } catch (err) {
-    return jsonResponse({ aberto: false, erro: err.message });
+    return jsonResponse({ aberto: false, erro: String(err && err.message || err), stack: String(err && err.stack || '') });
   }
 }
 
@@ -968,7 +1001,45 @@ function gravarApontamento(payload) {
     };
     const tiposFechamento = Object.keys(TIPO_COMPATIVEL);
 
-    if (tiposAbertura.includes(tipo)) {
+    // Fix#ParadaAninhada: INICIO_PARADA pode aninhar dentro de uma ABERTURA ou INÍCIO DE
+    // RETRABALHO já aberto, SEM fechá-lo — pausa a atividade-pai em vez de conflitar com ela
+    // (retrabalho continua sem aninhamento — só produção e retrabalho podem SER pausados,
+    // a parada em si nunca pausa outra parada). Roda ANTES do bloqueio genérico abaixo porque,
+    // para este tipo específico, achar uma linha do operador em Abertos não é necessariamente
+    // um erro: se o tipo existente for aninhável, desvia para Paradas_Aninhadas em vez de
+    // bloquear. paradaAninhadaInfo != null sinaliza esse desvio para o bloco de gravação mais
+    // abaixo (grava em Paradas_Aninhadas, não em Abertos).
+    let paradaAninhadaInfo = null;
+    if (tipo === 'INICIO_PARADA') {
+      const abaParadasAn = garantirAbaParadasAninhadas(ss);
+      const dadosParadasAn = abaParadasAn.getDataRange().getValues();
+      for (let i = 1; i < dadosParadasAn.length; i++) {
+        if (mesmoOperador(dadosParadasAn[i][0], payload.operador)) {
+          return jsonResponse({
+            success: false,
+            bloqueado: true,
+            message: 'Operador já possui uma parada em andamento. Finalize-a antes de iniciar outra.',
+          });
+        }
+      }
+      for (let i = 1; i < dadosAbertos.length; i++) {
+        if (!dadosAbertos[i][0]) continue;
+        if (mesmoOperador(dadosAbertos[i][0], payload.operador)) {
+          const tipoExistenteAn = String(dadosAbertos[i][2] || '').trim();
+          if (tipoExistenteAn === 'ABERTURA' || tipoExistenteAn === TIPOS_APONTAMENTO.INICIO_RETRABALHO) {
+            paradaAninhadaInfo = {
+              abertoIdPai: String(dadosAbertos[i][12] || '').trim(),
+              tipoPai:     tipoExistenteAn,
+              nrSeriePai:  String(dadosAbertos[i][7]  || '').trim(),
+              codItemPai:  String(dadosAbertos[i][5]  || '').trim(),
+            };
+          }
+          break; // achou a linha do operador (aninhável ou não) — não há mais o que procurar
+        }
+      }
+    }
+
+    if (tiposAbertura.includes(tipo) && !paradaAninhadaInfo) {
       for (let i = 1; i < dadosAbertos.length; i++) {
         if (!dadosAbertos[i][0]) continue; // linha vazia
         if (mesmoOperador(dadosAbertos[i][0], payload.operador)) {
@@ -990,6 +1061,13 @@ function gravarApontamento(payload) {
               if (!existeEmRe) {
                 // Fantasma confirmado — remove de Abertos e deixa prosseguir
                 abaAb.deleteRow(i + 1);
+                // Fix#PokaYokeEsquecido: sincroniza o array EM MEMÓRIA com a planilha real.
+                // dadosAbertos foi lido uma única vez no início de gravarApontamento e é
+                // reaproveitado por atualizarAbertos() mais abaixo — sem este splice, esse
+                // array continuaria com a linha fantasma (já removida da planilha), fazendo
+                // atualizarAbertos() operar sobre índices desalinhados com a planilha real
+                // (toda linha abaixo da deletada se desloca uma posição para cima).
+                dadosAbertos.splice(i, 1);
                 Logger.log('gravarApontamento [Bug#29]: fantasma removido — op=' +
                   payload.operador + ', abertoId=' + abertoIdExistente);
                 break; // sai do loop e continua para gravar a nova abertura
@@ -1060,7 +1138,27 @@ function gravarApontamento(payload) {
     //   • semAberto: bloqueia fechamento quando não há abertura em aberto
     //   • serieIncompativel: bloqueia FECHAMENTO com nrSerie diferente da abertura
     // ---------------------------------------------------------------
-    if (tiposFechamento.includes(tipo)) {
+    // Fix#ParadaAninhada: TERMINO_PARADA pode estar fechando uma parada ANINHADA — ela nunca
+    // esteve em Abertos (só em Paradas_Aninhadas), então o bloco de validação de fechamento
+    // genérico abaixo (que exige achar algo em Abertos) devolveria "semAberto" incorretamente.
+    // Detecta isso ANTES e desvia por completo — não passa pela validação genérica.
+    let paradaAninhadaParaFechar = null;
+    if (tipo === 'TERMINO_PARADA') {
+      const abaParadasAnFech = garantirAbaParadasAninhadas(ss);
+      const dadosParadasAnFech = abaParadasAnFech.getDataRange().getValues();
+      for (let i = 1; i < dadosParadasAnFech.length; i++) {
+        if (mesmoOperador(dadosParadasAnFech[i][0], payload.operador)) {
+          paradaAninhadaParaFechar = {
+            linhaPlanilha: i + 1,
+            abertoIdPai:    String(dadosParadasAnFech[i][2] || '').trim(),
+            abertoIdParada: String(dadosParadasAnFech[i][4] || '').trim(),
+          };
+          break;
+        }
+      }
+    }
+
+    if (tiposFechamento.includes(tipo) && !paradaAninhadaParaFechar) {
       const abertoIdPayload = String(payload.abertoId || '').trim();
 
       // Validar formato do abertoId quando fornecido: deve ser AP-XXXXXXXXXX (10 hex)
@@ -1129,6 +1227,25 @@ function gravarApontamento(payload) {
               message: 'Não é possível fechar um apontamento de outro operador.',
               semAberto: true,
             });
+          }
+          // Fix#ParadaAninhada: não permite fechar a ABERTURA/INÍCIO DE RETRABALHO enquanto
+          // a parada aninhada dela ainda está ativa — força o operador a encerrar a parada
+          // primeiro. Sem isso, fechar "por baixo" da parada deixaria a linha em
+          // Paradas_Aninhadas órfã (apontando para um pai que já não existe mais em Abertos).
+          if (tipo === 'FECHAMENTO' || tipo === 'TERMINO_RETRABALHO') {
+            const rowIdAtual = String(dadosAbertos[i][12] || '').trim();
+            const abaParadasAnCheck = garantirAbaParadasAninhadas(ss);
+            const dadosParadasAnCheck = abaParadasAnCheck.getDataRange().getValues();
+            const paradaAtivaNesta = dadosParadasAnCheck.some((r, idx) =>
+              idx > 0 && String(r[2] || '').trim() === rowIdAtual
+            );
+            if (paradaAtivaNesta) {
+              return jsonResponse({
+                success: false,
+                message: 'Existe uma parada em andamento vinculada a este apontamento — finalize a parada antes de fechar.',
+                paradaAninhadaAtiva: true,
+              });
+            }
           }
           encontrou = true;
           const tipoAberto   = String(dadosAbertos[i][2] || '').trim();
@@ -1317,12 +1434,24 @@ function gravarApontamento(payload) {
       // Fix#ID-LINK: col P = "elo de pareamento"
       // • ABERTURA  → abertoId (novo ID gerado acima)
       // • FECHAMENTO → payload.abertoId (ID da ABERTURA sendo fechada, validado antes)
-      // • Parada/Retrabalho → ID próprio (não participa do pareamento AB↔FE)
+      // • TERMINO_PARADA de parada aninhada → abertoId da PRÓPRIA parada, achado no servidor
+      //   (Paradas_Aninhadas) — não depende do client mandar o valor certo.
+      // • Parada/Retrabalho (demais casos) → ID próprio (não participa do pareamento AB↔FE)
       tiposAbertura.includes(tipo)
         ? abertoId
-        : (tiposFechamento.includes(tipo) && String(payload.abertoId || '').trim())
-          ? String(payload.abertoId).trim()
-          : gerarIdApontamento(), // P
+        : paradaAninhadaParaFechar
+          ? paradaAninhadaParaFechar.abertoIdParada
+          : (tiposFechamento.includes(tipo) && String(payload.abertoId || '').trim())
+            ? String(payload.abertoId).trim()
+            : gerarIdApontamento(), // P
+      '', // Q — LoteSeries (só setado explicitamente no path de lote, linhaMod[16] abaixo)
+      // Fix#ParadaAninhada: R — AbertoId do pai (ABERTURA/INÍCIO DE RETRABALHO) pausado por
+      // esta parada. Preenchido tanto na abertura quanto no fechamento da parada aninhada,
+      // para o dashboard conseguir cruzar todo o par INICIO/TERMINO pelo mesmo pai. Vazio em
+      // qualquer linha que não seja uma parada aninhada.
+      paradaAninhadaInfo ? paradaAninhadaInfo.abertoIdPai
+        : paradaAninhadaParaFechar ? paradaAninhadaParaFechar.abertoIdPai
+        : '',
     ];
 
     let linhasGravadas = 1; // padrão série única; sobrescrito nos paths de lote abaixo
@@ -1481,8 +1610,33 @@ function gravarApontamento(payload) {
     // loteSeriesFechamento já foi preenchido na validação acima (quando tipo === 'FECHAMENTO'
     // e a abertura original era um lote) — reaproveitado aqui no saldo parcial.
 
-    // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
-    atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
+    if (paradaAninhadaInfo) {
+      // Fix#ParadaAninhada: parada aninhada NÃO toca em Abertos — a ABERTURA/INÍCIO DE
+      // RETRABALHO pai continua exatamente como estava, congelada até esta parada fechar.
+      // Controle fica isolado em Paradas_Aninhadas (ver garantirAbaParadasAninhadas).
+      const abaParadasAn = garantirAbaParadasAninhadas(ss);
+      abaParadasAn.appendRow([
+        normalizarCodigoOp(payload.operador || ''),
+        nomeOperador,
+        paradaAninhadaInfo.abertoIdPai,
+        paradaAninhadaInfo.tipoPai,
+        abertoId,
+        tipoFormatado,
+        carimbo,
+        paradaAninhadaInfo.nrSeriePai,
+        paradaAninhadaInfo.codItemPai,
+      ]);
+    } else if (paradaAninhadaParaFechar) {
+      // Fix#ParadaAninhada: fechando uma parada aninhada — remove o controle dedicado.
+      // Abertos nunca foi tocado por esta parada, então também não precisa ser tocado aqui;
+      // a ABERTURA/INÍCIO DE RETRABALHO pai permanece intocada, pronta para ser fechada
+      // normalmente (ou pausada de novo) pelo operador.
+      const abaParadasAnFechWrite = garantirAbaParadasAninhadas(ss);
+      abaParadasAnFechWrite.deleteRow(paradaAninhadaParaFechar.linhaPlanilha);
+    } else {
+      // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
+      atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
+    }
     // Bug#1 fix: força commit imediato para que verificarAberto() leia dados atualizados
     SpreadsheetApp.flush();
 
@@ -1616,6 +1770,21 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
     // Verifica por operador (não por série) — um aberto por operador
     for (let i = 1; i < dados.length; i++) {
       if (mesmoOperador(dados[i][0], operador)) {
+        // Fix#PokaYokeEsquecido: chegar aqui significa que a validação de bloqueio em
+        // gravarApontamento já decidiu que era seguro prosseguir (bloqueou ou removeu
+        // fantasma antes) — mas se ainda assim sobra uma linha do operador aqui, é porque
+        // ela representa uma abertura genuína NUNCA FECHADA. Sobrescrevê-la silenciosamente
+        // (comportamento antigo) apaga esse rastro para sempre. Loga um alerta para
+        // auditoria/investigação, sem bloquear a gravação (a decisão de permitir já foi
+        // tomada antes desta função ser chamada).
+        const abertoIdAnterior = String(dados[i][12] || '').trim();
+        const tipoAnterior     = String(dados[i][2]  || '').trim();
+        if (abertoIdAnterior && abertoIdAnterior !== (abertoId || '')) {
+          Logger.log('ALERTA gravarApontamento [PokaYokeEsquecido]: sobrescrevendo aberto ' +
+            'não fechado — operador=' + operador + ', tipoAnterior="' + tipoAnterior +
+            '", abertoIdAnterior=' + abertoIdAnterior + ', abertoIdNovo=' + (abertoId || '') +
+            '. A abertura anterior nunca recebeu fechamento correspondente.');
+        }
         aba.getRange(i + 1, 1, 1, novaLinha.length).setValues([novaLinha]);
         aba.getRange(i + 1, 1).setNumberFormat('@');
         return;
@@ -1948,6 +2117,33 @@ function garantirAbaAbertos(ss) {
     // Migração leve: planilhas existentes ganham a coluna IsLote sem perder dados
     aba.getRange(1, 14).setValue('IsLote');
     aba.getRange(1, 14).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
+  }
+  return aba;
+}
+
+// ================================================================
+// PARADAS ANINHADAS (Fix#ParadaAninhada) — controle de paradas iniciadas DENTRO de uma
+// ABERTURA ou INÍCIO DE RETRABALHO já aberto, sem fechá-lo. Estrutura separada de Abertos
+// de propósito: Abertos assume histórico e código existente de "uma linha por operador",
+// e essa suposição já causou bugs sutis (Fix#PokaYokeEsquecido) — isolar a parada aninhada
+// numa aba própria evita reabrir essa superfície frágil. Enquanto uma linha existir aqui
+// para um operador, a ABERTURA/RETRABALHO associado (identificado por AbertoIdPai) continua
+// intocado em Abertos — congelado, não fechável, até esta parada ser encerrada.
+// Colunas: Operador, OperadorNome, AbertoIdPai, TipoPai, AbertoIdParada, TipoParada, Carimbo,
+//          NrSeriePai, CodItemPai (as duas últimas só para contexto legível na planilha).
+// ================================================================
+function garantirAbaParadasAninhadas(ss) {
+  let aba = ss.getSheetByName(ABA_PARADAS_ANINHADAS);
+  if (!aba) {
+    aba = ss.insertSheet(ABA_PARADAS_ANINHADAS);
+    const cab = ['Operador','OperadorNome','AbertoIdPai','TipoPai','AbertoIdParada','TipoParada','Carimbo','NrSeriePai','CodItemPai'];
+    aba.appendRow(cab);
+    aba.setFrozenRows(1);
+    aba.getRange(1,1,1,cab.length).setFontWeight('bold').setBackground('#8e6b1a').setFontColor('#fff');
+    aba.getRange('A:A').setNumberFormat('@');
+    aba.getRange('C:C').setNumberFormat('@');
+    aba.getRange('E:E').setNumberFormat('@');
+    aba.getRange('G:G').setNumberFormat('@');
   }
   return aba;
 }
@@ -2828,6 +3024,17 @@ function atualizarCabecalhos() {
   Logger.log('Cabeçalhos atualizados: coluna O = QTD PLANEJADA, coluna P = ID');
 }
 
+// Cria o cabeçalho da coluna R (índice 17, COL_RE.ABERTO_ID_PAI) usada pelo suporte a
+// parada aninhada (Fix#ParadaAninhada) — roda uma vez, idempotente.
+function _adicionarColunaAbertoIdPai() {
+  const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName(ABA_RESPOSTAS);
+  if (!aba) { Logger.log('Aba Respostas não encontrada.'); return; }
+  aba.getRange(1, 18).setValue('AbertoId Pai (Parada Aninhada)');
+  aba.getRange('R:R').setNumberFormat('@');
+  Logger.log('Coluna R (AbertoId Pai) criada em Respostas.');
+}
+
 // IMPORTANTE: rode isso para limpar registros ruins da aba Abertos
 function limparAbertos() {
   const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
@@ -2920,11 +3127,24 @@ function reconstruirAbertos() {
 
   // Map: codigoOperador → dados da última abertura em aberto
   const abertosPorOp = {};
+  // Fix#ParadaAninhada: paradas iniciadas DENTRO de uma ABERTURA/RETRABALHO (identificadas
+  // pela coluna R = AbertoIdPai preenchida) não ocupam abertosPorOp — têm sua própria vaga
+  // paralela, já que a produção/retrabalho pai continua "aberta" simultaneamente. Sem esta
+  // separação, o código abaixo trataria a parada aninhada como uma segunda abertura genérica
+  // do mesmo operador, disparando um falso positivo de anomaliasPokaYoke (a produção pai
+  // pareceria "esquecida", quando na verdade está corretamente pausada, não abandonada).
+  const paradasAninhadasPorOp = {};
   // Contadores por abertoId: quantas séries foram abertas e fechadas
   // Necessário para lotes parcialmente fechados: um FECHAMENTO de UMA série não deve
   // remover o operador de abertosPorOp — só remove quando TODAS as séries foram fechadas.
   const seriesAbertasPorId  = {}; // abertoId → count de linhas ABERTURA
   const seriesFechadasPorId = {}; // abertoId → count de linhas FECHAMENTO
+  // Fix#PokaYokeEsquecido: registra quando encontramos uma abertura nova para um operador que
+  // JÁ tinha uma abertura anterior sem fechamento correspondente. Sem esta detecção, o código
+  // abaixo sobrescreveria abertosPorOp[operadorCod] silenciosamente — apagando para sempre o
+  // rastro da abertura mais antiga (que nunca recebeu FECHAMENTO/TÉRMINO) e permitindo que o
+  // operador continue abrindo indefinidamente sem nunca ser bloqueado por ela.
+  const anomaliasPokaYoke = [];
 
   for (let i = 1; i < dadosRe.length; i++) {
     const row = dadosRe[i];
@@ -2950,7 +3170,28 @@ function reconstruirAbertos() {
     const operadorCod = normalizarCodigoOp(codPart || operadorRaw);
     if (!operadorCod) continue;
 
-    const abertoIdRe = String(row[15] || '').trim();
+    const abertoIdRe    = String(row[15] || '').trim();
+    const abertoIdPaiRe = String(row[17] || '').trim(); // col R — Fix#ParadaAninhada
+
+    // Fix#ParadaAninhada: linha de INICIO_PARADA com AbertoIdPai preenchido é uma parada
+    // aninhada — não ocupa abertosPorOp (a produção/retrabalho pai continua aberta em
+    // paralelo). Guarda numa vaga separada e pula o processamento genérico de abertura.
+    if (ehAbertura(tipo) && abertoIdPaiRe) {
+      // nrSeriePai: recupera do pai já processado nesta reconstrução (cronológica — o pai
+      // sempre aparece antes) quando disponível; contexto informativo, não crítico.
+      const paiAtual = abertosPorOp[operadorCod];
+      const paiCasaComEsperado = paiAtual && paiAtual.abertoId === abertoIdPaiRe;
+      paradasAninhadasPorOp[operadorCod] = {
+        operador: operadorCod, operadorNome: operadorRaw,
+        abertoIdPai: abertoIdPaiRe, abertoIdParada: abertoIdRe,
+        tipoPai: paiCasaComEsperado ? paiAtual.tipo : '',
+        tipoParada: String(row[10] || '').trim(), // col K — Tipo de parada
+        carimbo: carimboBruto,
+        nrSeriePai: paiCasaComEsperado ? paiAtual.nrSerie : '',
+        codItemPai: String(row[4] || '').trim(),
+      };
+      continue;
+    }
 
     if (ehAbertura(tipo)) {
       // Campo F: "22000073 | HAULER 10" | SÃO MARTINHO"
@@ -2967,6 +3208,20 @@ function reconstruirAbertos() {
 
       // Conta série aberta por abertoId (para decidir fechamento parcial vs. total)
       if (abertoIdRe) seriesAbertasPorId[abertoIdRe] = (seriesAbertasPorId[abertoIdRe] || 0) + 1;
+
+      // Fix#PokaYokeEsquecido: se já há uma abertura pendente deste operador (nunca fechada),
+      // NÃO sobrescreve — preserva a mais antiga como o que realmente bloqueia o operador
+      // (é ela que está pendente há mais tempo) e registra a anomalia para investigação/
+      // correção manual em vez de apagar o rastro silenciosamente.
+      const pendenteAnterior = abertosPorOp[operadorCod];
+      if (pendenteAnterior && pendenteAnterior.abertoId !== abertoIdRe) {
+        anomaliasPokaYoke.push({
+          operador: operadorCod, operadorNome: operadorRaw,
+          tipoAnterior: pendenteAnterior.tipo, carimboAnterior: pendenteAnterior.carimbo, abertoIdAnterior: pendenteAnterior.abertoId,
+          tipoNovo: tipo, carimboNovo: carimboBruto, abertoIdNovo: abertoIdRe,
+        });
+        continue; // mantém a mais antiga em abertosPorOp — não sobrescreve
+      }
 
       abertosPorOp[operadorCod] = {
         operador:      operadorCod,
@@ -2985,6 +3240,11 @@ function reconstruirAbertos() {
         isLote:        loteSeriesStr ? 'Sim' : 'Não', // col 13 — deriva do loteSeries sem heurística de texto
       };
 
+    } else if (ehFechamento(tipo) && abertoIdPaiRe) {
+      // Fix#ParadaAninhada: TERMINO_PARADA de uma parada aninhada — remove só da vaga
+      // paralela. A ABERTURA/RETRABALHO pai (abertosPorOp) nunca foi tocada por esta parada
+      // e continua intocada aqui também.
+      delete paradasAninhadasPorOp[operadorCod];
     } else if (ehFechamento(tipo)) {
       // Conta série fechada por abertoId
       if (abertoIdRe) seriesFechadasPorId[abertoIdRe] = (seriesFechadasPorId[abertoIdRe] || 0) + 1;
@@ -3091,14 +3351,42 @@ function reconstruirAbertos() {
     abaAb.deleteRows(linhasUsadas + 1, totalAtual - linhasUsadas);
   }
 
+  // Fix#ParadaAninhada: reconstrói Paradas_Aninhadas do zero a partir do que sobrou em
+  // paradasAninhadasPorOp (mesmo padrão de auto-cura já usado para Abertos acima).
+  const abaParadasAnRec = garantirAbaParadasAninhadas(ss);
+  const paradasAtivas = Object.values(paradasAninhadasPorOp);
+  const linhasParadasAn = paradasAtivas.map(p => [
+    nomeToCodigoOp[p.operadorNome] || p.operador,
+    p.operadorNome,
+    p.abertoIdPai,
+    p.tipoPai,
+    p.abertoIdParada,
+    p.tipoParada,
+    p.carimbo,
+    p.nrSeriePai,
+    p.codItemPai,
+  ]);
+  const totalParadasAnAntes = Math.max(0, abaParadasAnRec.getLastRow() - 1);
+  if (totalParadasAnAntes > 0) abaParadasAnRec.deleteRows(2, totalParadasAnAntes);
+  if (linhasParadasAn.length > 0) {
+    abaParadasAnRec.getRange(2, 1, linhasParadasAn.length, 9).setValues(linhasParadasAn);
+    abaParadasAnRec.getRange(2, 1, linhasParadasAn.length, 1).setNumberFormat('@');
+  }
+
   SpreadsheetApp.flush();
 
   const msg = 'reconstruirAbertos: ' + registrosAntes + ' antes → ' + abertos.length + ' depois.';
   Logger.log(msg);
+  if (anomaliasPokaYoke.length > 0) {
+    Logger.log('ALERTA reconstruirAbertos [PokaYokeEsquecido]: ' + anomaliasPokaYoke.length +
+      ' operador(es) com abertura anterior nunca fechada, preservada em vez de sobrescrita: ' +
+      JSON.stringify(anomaliasPokaYoke));
+  }
   return {
     corrigidos: registrosAntes - abertos.length,
     abertos:    abertos.length,
     mensagem:   msg,
+    anomaliasPokaYoke: anomaliasPokaYoke,
   };
   } finally {
     lock.releaseLock();
@@ -7031,3 +7319,231 @@ function _removerSaldoPorAbertoId(abertoId) {
   return removidas;
 }
 function _removerTesteBlindagem() { return _removerSaldoPorAbertoId('AP-B2B2E2D95F'); }
+
+// ================================================================
+// DIAGNÓSTICO: falhas do poka-yoke (dupla abertura sem fechamento) ================
+// Percorre Respostas cronologicamente por operador, tratando qualquer tipo de
+// ABERTURA/INÍCIO como "abre" e qualquer FECHAMENTO/TÉRMINO como "fecha". Reporta
+// todo caso em que uma segunda abertura aconteceu antes de um fechamento da anterior
+// para o MESMO operador — exatamente o cenário relatado (poka-yoke falhou).
+// Somente leitura, não altera nada.
+// ================================================================
+function _diagPokaYokeFalhas() {
+  const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  const dados = abaRe.getDataRange().getValues();
+
+  const TIPOS_ABERTURA_SET   = new Set(['ABERTURA', 'INÍCIO DE RETRABALHO', 'INÍCIO DE PARADA']);
+  const TIPOS_FECHAMENTO_SET = new Set(['FECHAMENTO', 'TÉRMINO DE RETRABALHO', 'TÉRMINO DE PARADA']);
+
+  // Monta lista de eventos com operador normalizado + timestamp em ms, ordenada cronologicamente
+  // (a ordem das linhas já deveria ser cronológica, mas edições/migrações podem ter bagunçado).
+  const eventos = [];
+  for (let i = 1; i < dados.length; i++) {
+    const row = dados[i];
+    const tipoRaw = String(row[COL_RE.TIPO] || '').trim().normalize('NFC');
+    if (!TIPOS_ABERTURA_SET.has(tipoRaw) && !TIPOS_FECHAMENTO_SET.has(tipoRaw)) continue;
+    const nomeOp = String(row[COL_RE.OPERADOR] || '');
+    const mCod = nomeOp.match(/\d+/);
+    if (!mCod) continue;
+    const opCod = normalizarCodigoOp(mCod[0]);
+    // parseCarimboGsMs espera a STRING já formatada (dd/MM/yyyy HH:mm:ss) por formatarCarimboGs —
+    // passar o valor bruto da célula (Date, ISO string, etc.) direto quebra com
+    // "s.match is not a function" quando o Sheets devolve um objeto Date.
+    const carimboFormatado = formatarCarimboGs(row[COL_RE.CARIMBO]);
+    const ms = parseCarimboGsMs(carimboFormatado);
+    eventos.push({
+      linha: i + 1,
+      operador: opCod,
+      operadorNome: nomeOp,
+      tipo: tipoRaw,
+      ehAbertura: TIPOS_ABERTURA_SET.has(tipoRaw),
+      carimbo: carimboFormatado,
+      carimboMs: ms,
+      serie: String(row[COL_RE.SERIE] || ''),
+      operacao: String(row[COL_RE.OPERACAO] || ''),
+      codItem: String(row[COL_RE.COD_ITEM] || ''),
+      abertoId: String(row[COL_RE.ABERTO_ID] || '').trim(),
+    });
+  }
+  eventos.sort((a, b) => (a.carimboMs || 0) - (b.carimboMs || 0));
+
+  // Agrupa por operador e percorre cronologicamente
+  const porOperador = {};
+  eventos.forEach(e => {
+    if (!porOperador[e.operador]) porOperador[e.operador] = [];
+    porOperador[e.operador].push(e);
+  });
+
+  const falhas = [];
+  Object.keys(porOperador).forEach(op => {
+    let aberto = null; // evento de abertura atualmente "em aberto" para este operador
+    porOperador[op].forEach(e => {
+      if (e.ehAbertura) {
+        if (aberto) {
+          // Segunda abertura sem fechamento da anterior — FALHA DO POKA-YOKE
+          falhas.push({
+            operador: op,
+            operadorNome: e.operadorNome,
+            aberturaAnterior: { linha: aberto.linha, tipo: aberto.tipo, carimbo: aberto.carimbo, serie: aberto.serie, operacao: aberto.operacao, codItem: aberto.codItem, abertoId: aberto.abertoId },
+            aberturaNova:     { linha: e.linha,      tipo: e.tipo,      carimbo: e.carimbo,      serie: e.serie,      operacao: e.operacao,      codItem: e.codItem,      abertoId: e.abertoId },
+            gapSegundos: aberto.carimboMs && e.carimboMs ? Math.round((e.carimboMs - aberto.carimboMs) / 1000) : null,
+          });
+        }
+        aberto = e;
+      } else {
+        // Fechamento — fecha o que estava aberto, independente de bater o tipo exato
+        // (para fins de diagnóstico; a validação de tipo exato é feita em outro lugar)
+        aberto = null;
+      }
+    });
+  });
+
+  const resultado = {
+    totalEventos: eventos.length,
+    totalOperadoresComEventos: Object.keys(porOperador).length,
+    totalFalhas: falhas.length,
+  };
+
+  // Grava em aba dedicada — o Logger.log trunca saídas grandes (88 falhas com todos os
+  // detalhes excede o limite), e uma planilha é muito mais fácil de examinar por completo.
+  const NOME_ABA_DIAG = 'Diag_PokaYoke';
+  let abaDiag = ss.getSheetByName(NOME_ABA_DIAG);
+  if (abaDiag) ss.deleteSheet(abaDiag); // recria do zero a cada execução
+  abaDiag = ss.insertSheet(NOME_ABA_DIAG);
+  abaDiag.appendRow([
+    'Operador', 'OperadorNome',
+    'Tipo Anterior (nunca fechado)', 'Carimbo Anterior', 'Série Anterior', 'Operação Anterior', 'CodItem Anterior', 'AbertoId Anterior', 'Linha Anterior',
+    'Tipo Nova Abertura', 'Carimbo Nova', 'Série Nova', 'Operação Nova', 'CodItem Nova', 'AbertoId Nova', 'Linha Nova',
+    'Gap (segundos)', 'Gap (horas)',
+  ]);
+  abaDiag.setFrozenRows(1);
+  abaDiag.getRange(1, 1, 1, 18).setFontWeight('bold').setBackground('#4a2060').setFontColor('#fff');
+  if (falhas.length > 0) {
+    const linhas = falhas.map(f => [
+      f.operador, f.operadorNome,
+      f.aberturaAnterior.tipo, f.aberturaAnterior.carimbo, f.aberturaAnterior.serie, f.aberturaAnterior.operacao, f.aberturaAnterior.codItem, f.aberturaAnterior.abertoId, f.aberturaAnterior.linha,
+      f.aberturaNova.tipo, f.aberturaNova.carimbo, f.aberturaNova.serie, f.aberturaNova.operacao, f.aberturaNova.codItem, f.aberturaNova.abertoId, f.aberturaNova.linha,
+      f.gapSegundos, f.gapSegundos != null ? Math.round(f.gapSegundos / 3600 * 100) / 100 : '',
+    ]);
+    abaDiag.getRange(2, 1, linhas.length, 18).setValues(linhas);
+  }
+
+  Logger.log(JSON.stringify(resultado, null, 2));
+  return resultado;
+}
+
+// Análise agregada dos 88 casos gravados por _diagPokaYokeFalhas na aba Diag_PokaYoke —
+// classifica em buckets pra entender o PADRÃO comum sem precisar ler linha por linha.
+function _diagPokaYokeResumo() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const aba = ss.getSheetByName('Diag_PokaYoke');
+  if (!aba) return { erro: 'Rode _diagPokaYokeFalhas primeiro.' };
+  const dados = aba.getDataRange().getValues();
+
+  let comAbertoIdAnterior = 0, semAbertoIdAnterior = 0;
+  const porTipoAnterior = {};
+  const porTipoNova = {};
+  const porOperador = {};
+  let gapMenos1min = 0, gap1a10min = 0, gap10a60min = 0, gapMais1h = 0;
+  const amostraSemAbertoId = [];
+  const amostraComAbertoId = [];
+
+  for (let i = 1; i < dados.length; i++) {
+    const row = dados[i];
+    const tipoAnterior = row[2];   // C: Tipo Anterior
+    const abertoIdAnterior = String(row[7] || '').trim(); // H: AbertoId Anterior
+    const tipoNova = row[9];       // J: Tipo Nova Abertura
+    const operador = row[0];       // A: Operador
+    const gapSeg = Number(row[16]) || 0; // Q: Gap (segundos)
+
+    porTipoAnterior[tipoAnterior] = (porTipoAnterior[tipoAnterior] || 0) + 1;
+    porTipoNova[tipoNova] = (porTipoNova[tipoNova] || 0) + 1;
+    porOperador[operador] = (porOperador[operador] || 0) + 1;
+
+    if (abertoIdAnterior) {
+      comAbertoIdAnterior++;
+      if (amostraComAbertoId.length < 3) amostraComAbertoId.push({ linha: i+1, operador, tipoAnterior, abertoIdAnterior, gapSeg });
+    } else {
+      semAbertoIdAnterior++;
+      if (amostraSemAbertoId.length < 3) amostraSemAbertoId.push({ linha: i+1, operador, tipoAnterior, gapSeg });
+    }
+
+    if (gapSeg < 60) gapMenos1min++;
+    else if (gapSeg < 600) gap1a10min++;
+    else if (gapSeg < 3600) gap10a60min++;
+    else gapMais1h++;
+  }
+
+  const resumo = {
+    totalCasos: dados.length - 1,
+    comAbertoIdAnterior, semAbertoIdAnterior,
+    porTipoAnterior, porTipoNova, porOperador,
+    distribuicaoGap: { gapMenos1min, gap1a10min, gap10a60min, gapMais1h },
+    amostraSemAbertoId, amostraComAbertoId,
+  };
+  Logger.log(JSON.stringify(resumo, null, 2));
+  return resumo;
+}
+
+// Cruza os 88 casos históricos (aba Diag_PokaYoke) com o estado ATUAL para determinar quais
+// ainda representam algo genuinamente pendente hoje — vs. já resolvidos depois (o operador
+// fechou normalmente numa sessão posterior, mesmo que o controle interno tenha "esquecido").
+// Somente leitura.
+function _diagPokaYokeStatusAtual() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaDiag = ss.getSheetByName('Diag_PokaYoke');
+  if (!abaDiag) return { erro: 'Rode _diagPokaYokeFalhas primeiro.' };
+  const dadosDiag = abaDiag.getDataRange().getValues();
+
+  const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+  const dadosRe = abaRe.getDataRange().getValues();
+  // Conjunto de abertoIds que JÁ TÊM um fechamento correspondente em Respostas (qualquer tipo
+  // de fechamento) — se o abertoId anterior está aqui, já foi resolvido, mesmo que tardiamente.
+  const TIPOS_FECHAMENTO_SET = new Set(['FECHAMENTO', 'TÉRMINO DE RETRABALHO', 'TÉRMINO DE PARADA'].map(s => s.normalize('NFC')));
+  const abertoIdsFechados = new Set();
+  for (let i = 1; i < dadosRe.length; i++) {
+    const tipoRow = String(dadosRe[i][COL_RE.TIPO] || '').trim().normalize('NFC');
+    if (!TIPOS_FECHAMENTO_SET.has(tipoRow)) continue;
+    const idRow = String(dadosRe[i][COL_RE.ABERTO_ID] || '').trim();
+    if (idRow) abertoIdsFechados.add(idRow);
+  }
+
+  // Conjunto de abertoIds ainda presentes na aba Abertos ATUAL (controle ativo)
+  const abaAb = ss.getSheetByName(ABA_ABERTOS);
+  const dadosAb = abaAb ? abaAb.getDataRange().getValues() : [];
+  const abertoIdsNoControleAtual = new Set();
+  for (let i = 1; i < dadosAb.length; i++) {
+    const idRow = String(dadosAb[i][COL_AB.ABERTO_ID] || '').trim();
+    if (idRow) abertoIdsNoControleAtual.add(idRow);
+  }
+
+  let jaResolvidos = 0, aindaPendentesNoControle = 0, semAbertoIdParaVerificar = 0, indeterminados = 0;
+  const listaPendentes = [];
+  for (let i = 1; i < dadosDiag.length; i++) {
+    const row = dadosDiag[i];
+    const abertoIdAnterior = String(row[7] || '').trim(); // H: AbertoId Anterior
+    if (!abertoIdAnterior) { semAbertoIdParaVerificar++; continue; }
+    if (abertoIdsFechados.has(abertoIdAnterior)) { jaResolvidos++; continue; }
+    if (abertoIdsNoControleAtual.has(abertoIdAnterior)) {
+      aindaPendentesNoControle++;
+      listaPendentes.push({
+        operador: row[0], operadorNome: row[1], tipoAnterior: row[2], carimboAnterior: row[3],
+        serieAnterior: row[4], operacaoAnterior: row[5], codItemAnterior: row[6], abertoIdAnterior,
+      });
+    } else {
+      // Não está fechado em Respostas E não está mais no controle Abertos — provavelmente foi
+      // sobrescrito por uma abertura ainda mais nova (encadeamento de 3+ aberturas) antes desta
+      // correção existir. Precisa de investigação manual.
+      indeterminados++;
+    }
+  }
+
+  const resultado = {
+    totalCasos: dadosDiag.length - 1,
+    jaResolvidos, aindaPendentesNoControle, semAbertoIdParaVerificar, indeterminados,
+    listaPendentes,
+  };
+  Logger.log(JSON.stringify(resultado, null, 2));
+  return resultado;
+}
