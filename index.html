@@ -1628,6 +1628,19 @@ function atualizarBadgeFila(){
   }
 }
 
+// Move um item da fila para falhas permanentes: grava em agricef_falhas, avisa o operador
+// e dispara e-mail de alerta. Usado tanto para esgotamento de tentativas (falha transitória
+// persistente) quanto para rejeição de validação (erro determinístico — reenviar não resolve).
+function _moverParaFalhasPermanentes(item, motivo) {
+  const falhas = JSON.parse(localStorage.getItem('agricef_falhas')||'[]');
+  const itemFalho = {...item, _falhouEm: new Date().toISOString(), _motivo: motivo};
+  falhas.push(itemFalho);
+  localStorage.setItem('agricef_falhas', JSON.stringify(falhas));
+  console.error('AGRICEF: apontamento movido para fila de falhas permanentes —', motivo, item);
+  showToast('⛔ Apontamento de '+item.hora+' não pôde ser registrado ('+motivo+'). Contate o suporte.','error',10000);
+  fetch(API+'?action=notificarFalhaPermanente&item='+encodeURIComponent(JSON.stringify(itemFalho))).catch(()=>{});
+}
+
 let _sincronizando = false;
 // Promise da sincronização em andamento — permite que outras rotinas (ex.: verificarAbertoSeCompleto)
 // aguardem a fila offline ser esvaziada antes de consultar o estado "aberto" no servidor.
@@ -1667,18 +1680,8 @@ async function _sincronizarFilaImpl(manual){
       const id = _idItemFila(item);
       const tentativas = (item._tentativas || 0) + 1;
       if (tentativas > FILA_MAX_TENTATIVAS) {
-        // Após N tentativas sem sucesso: move para fila de falhas permanentes
-        const falhas = JSON.parse(localStorage.getItem('agricef_falhas')||'[]');
-        const itemFalho = {...item, _falhouEm: new Date().toISOString()};
-        falhas.push(itemFalho);
-        localStorage.setItem('agricef_falhas', JSON.stringify(falhas));
-        console.error('AGRICEF: apontamento movido para fila de falhas permanentes', item);
-        // Badge especial de erro crítico
-        showToast('⛔ Apontamento de '+item.hora+' não pôde ser sincronizado após '+FILA_MAX_TENTATIVAS+' tentativas. Contate o suporte.','error',10000);
-        // Avisa por e-mail — sem isso, a única forma de alguém saber que um apontamento real
-        // se perdeu seria o operador notar este toast e relatar manualmente. Fire-and-forget:
-        // não bloqueia o fluxo nem depende da resposta.
-        fetch(API+'?action=notificarFalhaPermanente&item='+encodeURIComponent(JSON.stringify(itemFalho))).catch(()=>{});
+        // Após N tentativas sem sucesso (falha transitória persistente): move para falhas permanentes
+        _moverParaFalhasPermanentes(item, 'esgotou '+FILA_MAX_TENTATIVAS+' tentativas de reenvio');
         resultados.set(id, 'remover');
         continue;
       }
@@ -1688,6 +1691,13 @@ async function _sincronizarFilaImpl(manual){
         delete itemSemMeta._salvoEm;
         const d=await postAPI(itemSemMeta);
         if(d.success){
+          sincronizados++;
+          resultados.set(id, 'remover');
+        } else if (d.jaFechado || (d.jaAberto && d.bloqueado)) {
+          // Este item específico já foi aplicado com sucesso numa tentativa anterior cuja
+          // resposta não chegou ao cliente (retry após falha de rede) — nada a fazer, remove
+          // da fila. Não é erro: é o próprio requestId confirmando idempotência.
+          console.log('AGRICEF: item da fila já havia sido aplicado anteriormente, removendo', item);
           sincronizados++;
           resultados.set(id, 'remover');
         } else if (d.semAberto && TIPOS_FECHAMENTO_FILA.includes(item.tipoApontamento)) {
@@ -1709,7 +1719,19 @@ async function _sincronizarFilaImpl(manual){
             console.warn('AGRICEF: fechamento sem abertura correspondente E não confirmado como já registrado — mantendo na fila', item, 'confirmacao:', confirmacao);
             resultados.set(id, {...item, _tentativas: tentativas});
           }
+        } else if (d.incompativel || (d.bloqueado && !d.jaAberto)) {
+          // Erro de validação/conflito real (tipo, série, operação ou item incompatível com o
+          // que está de fato aberto no servidor; ou bloqueado por OUTRA abertura genuinamente
+          // diferente) — é uma rejeição determinística, reenviar o mesmo payload nunca vai
+          // funcionar. Manter isso na fila só faria o operador achar que "está sendo
+          // processado" por até 20 tentativas, quando na verdade precisa de correção manual
+          // — exatamente o tipo de apontamento que fica preso silenciosamente. Move direto
+          // para falhas permanentes com o motivo exato em vez de esperar o limite de tentativas.
+          _moverParaFalhasPermanentes(item, d.message || 'rejeitado pelo servidor');
+          resultados.set(id, 'remover');
         } else {
+          // Falha transitória (rede, timeout, lock ocupado) ou erro não classificado —
+          // mantém na fila para nova tentativa.
           resultados.set(id, {...item, _tentativas: tentativas});
         }
       } catch{
