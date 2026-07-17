@@ -1707,6 +1707,7 @@ function gravarApontamento(payload) {
     return jsonResponse(respOk);
 
   } catch (err) {
+    _alertarErroSistema('gravarApontamento', err, 'operador=' + (payload.operador || '') + ', tipo=' + (payload.tipoApontamento || ''));
     return jsonResponse({ success: false, message: err.message });
   } finally {
     lock.releaseLock();
@@ -2558,6 +2559,47 @@ function verificarFechamentoRegistradoAction(abertoId, tipo) {
 }
 
 // ================================================================
+// ALERTA DE ERRO DE SISTEMA — para exceções INESPERADAS no backend (bug, cota do Google,
+// timeout do Sheets etc.), não para rejeições de validação normais (success:false esperado,
+// isso não é "problema do sistema"). Diferente de notificarFalhaPermanenteAction (que o
+// frontend aciona quando a fila offline desiste): este dispara do próprio backend sempre que
+// gravarApontamento ou a reconciliação periódica (reconstruirAbertos) lançam uma exceção não
+// tratada — hoje isso era engolido silenciosamente, virando só uma mensagem genérica de erro
+// pro operador, sem ninguém da equipe ficar sabendo.
+// Throttle via CacheService: no máx. 1 e-mail a cada 20min por origem — evita virar spam se o
+// mesmo erro repetir em rajada (o que faria a caixa de entrada ser ignorada, na prática
+// desligando o alerta).
+function _alertarErroSistema(origem, err, contexto) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const cacheKey = 'alerta_erro_' + origem;
+    if (cache.get(cacheKey)) return; // já alertou recentemente para essa origem — evita spam
+    cache.put(cacheKey, '1', 1200); // 20 min
+
+    const html =
+      '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333">' +
+      '<h3 style="color:#c0392b">🔥 Erro de sistema — AGRICEF</h3>' +
+      '<p>Uma exceção inesperada ocorreu em <strong>' + origem + '</strong>. Isso é diferente de uma ' +
+      'rejeição de validação normal — indica um bug ou falha de infraestrutura (cota do Google, ' +
+      'timeout do Sheets etc.) que pode estar afetando outros apontamentos também.</p>' +
+      '<table style="border-collapse:collapse;margin-top:8px">' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Erro</td><td style="padding:4px 10px">' + (err && err.message || String(err)) + '</td></tr>' +
+      '<tr><td style="padding:4px 10px;font-weight:bold">Horário</td><td style="padding:4px 10px">' + Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss') + '</td></tr>' +
+      (contexto ? '<tr><td style="padding:4px 10px;font-weight:bold">Contexto</td><td style="padding:4px 10px">' + contexto + '</td></tr>' : '') +
+      '</table>' +
+      (err && err.stack ? '<p style="margin-top:10px;font-size:11px;color:#888;white-space:pre-wrap">' + err.stack + '</p>' : '') +
+      '</div>';
+    MailApp.sendEmail({
+      to:       EMAIL_ALERTA_FALHA,
+      subject:  '🔥 AGRICEF | Erro de sistema — ' + origem,
+      htmlBody: html,
+    });
+  } catch (alertErr) {
+    Logger.log('_alertarErroSistema: falha ao enviar alerta — ' + alertErr.message);
+  }
+}
+
+// ================================================================
 // ALERTA DE FALHA PERMANENTE NA FILA OFFLINE — o frontend chama isso quando um apontamento
 // esgota as tentativas de reenvio automático (fila local do operador) e é movido para a fila
 // de falhas permanentes. Sem isso, a única forma de alguém saber que um apontamento real se
@@ -3388,6 +3430,13 @@ function reconstruirAbertos() {
     mensagem:   msg,
     anomaliasPokaYoke: anomaliasPokaYoke,
   };
+  } catch (err) {
+    // Sem isso, uma falha aqui é invisível: o trigger roda sozinho a cada 30min e uma exceção
+    // não tratada simplesmente não faz nada — Abertos fica sem reconciliar até alguém notar
+    // dados desencontrados manualmente. Re-lança para preservar o comportamento já esperado
+    // por quem chama isso via HTTP (a action 'reconstruirAbertos' já trata o erro e responde).
+    _alertarErroSistema('reconstruirAbertos', err);
+    throw err;
   } finally {
     lock.releaseLock();
   }
