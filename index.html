@@ -865,6 +865,22 @@ function iniciarFechamentoRapido() {
     state.cliente    = imp.cliente;
   }
 
+  // Fix#ParadaRetrabalhoRapido: este atalho ("Fechar este apontamento agora" no alerta
+  // poka-yoke) sempre assumiu que o aberto era uma ABERTURA e mandava tipoApontamento:
+  // 'FECHAMENTO' fixo — o backend rejeitava com "tipo de fechamento incompatível" sempre que
+  // o que estava aberto era um retrabalho ou uma parada, sem dar nenhum jeito de usar o
+  // atalho pra esses casos. Retrabalho e parada têm forma própria (motivo/tipo, sem
+  // série/lote/qtd) — em vez de forçar pela tela de fechamento de produção, direciona pro
+  // fluxo de término já correto (selecionarTipo já pré-seleciona o motivo/tipo certo a
+  // partir de state.abertoInfo, então o operador só confirma e envia).
+  const tipoAberto = String(state.abertoInfo.tipo || '');
+  if (tipoAberto === 'INÍCIO DE RETRABALHO' || tipoAberto === 'INÍCIO DE PARADA') {
+    mostrar('step2'); esconder('step1');
+    atualizarBotoesTipo();
+    selecionarTipo(tipoAberto === 'INÍCIO DE RETRABALHO' ? 'TERMINO_RETRABALHO' : 'TERMINO_PARADA');
+    return;
+  }
+
   state.modoFechamentoRapido = true;
   state.tipo = 'FECHAMENTO';
 
