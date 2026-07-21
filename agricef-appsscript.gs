@@ -909,7 +909,13 @@ function gravarApontamento(payload) {
     const _ehLote = payload.isLote === true || (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0);
 
     // Bug#22 fix: nrSerie obrigatório para tipos de abertura (exceto lote, validado mais abaixo)
-    if (_tiposAb.includes(tipo) && !_ehLote && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
+    // Fix#ParadaSemSerie: INICIO_PARADA nunca exige nrSerie — uma parada é um evento de tempo,
+    // não amarrado a uma série específica. Isso ficou explícito ao tentar aninhar parada dentro
+    // de um LOTE aberto (várias séries em loteSeries, nenhuma em payload.nrSerie): a checagem
+    // rodava ANTES de qualquer detecção de aninhamento e travava com "nrSerie obrigatório" mesmo
+    // sendo aninhada. Padrão já usado na prática antes disso: operadores registravam parada
+    // solta usando um valor qualquer em nrSerie (ex: "ENGENHARIA") só pra passar por aqui.
+    if (_tiposAb.includes(tipo) && tipo !== 'INICIO_PARADA' && !_ehLote && (!payload.nrSerie || String(payload.nrSerie).trim() === '')) {
       return jsonResponse({ success: false, message: 'Campo nrSerie é obrigatório para ' + tipo + '.' });
     }
     // Bug#28 fix: nrSerie não pode conter "|" (separador do campo F da planilha)
