@@ -455,9 +455,12 @@ label:first-child{margin-top:0}
 
 <div class="toast" id="toast"></div>
 
+<!-- Fix#FilaOffline: API, postAPI, a fila offline (IndexedDB) e a árvore de decisão de
+     sincronização vivem aqui — compartilhado com sw.js (Service Worker de Background Sync).
+     Precisa carregar ANTES do script inline abaixo, que usa API/postAPI/salvarOffline direto. -->
+<script src="agricef-fila-shared.js"></script>
 <script>
 // ===================== CONFIG =====================
-const API     = 'https://script.google.com/macros/s/AKfycbybtpUgNv_P8YkRNLmPwQVB4n3cS4XMlQQVQUFOgV7MUbjJWK5Xt8HZ8IJEUVHMJCihgA/exec';
 const PIN_ADMIN = '1234';
 
 // Operações BUILT-IN (sempre presentes, não podem ser removidas)
@@ -526,12 +529,15 @@ async function init() {
     toggleLoteSerie(s.nrSerie, s.implemento, s.cliente);
   });
   await carregarCadastros();
+  // Fix#FilaOffline: migra itens que sobraram do localStorage (versão anterior do app) pro
+  // IndexedDB antes de tentar sincronizar — nunca apaga o localStorage antes de confirmar a
+  // escrita (ver migrarFilaLegadaSeNecessario em agricef-fila-shared.js).
+  await migrarFilaLegadaSeNecessario();
+  registrarServiceWorker();
   // Tenta sincronizar apontamentos pendentes da sessão anterior
-  sincronizarFila();
-  // Badge inicial (mostra se houver itens pendentes de sessões anteriores)
+  const resultadoInicial = await sincronizarFila();
   atualizarBadgeFila();
-  // Retry automático a cada 30s enquanto a página estiver aberta
-  setInterval(() => sincronizarFila(), 30000);
+  _agendarProximoPoll(!!(resultadoInicial && resultadoInicial.restantes > 0));
 }
 
 function iniciarRelogio() {
@@ -1481,7 +1487,8 @@ async function enviarApontamento() {
       // deixar essa resposta só como um toast que depende do operador notar e reenviar
       // manualmente — isso é o que causava fechamentos "perdidos" quando vários operadores
       // enviavam ao mesmo tempo (ex: fim de turno) e o lock global do backend excedia o tempo.
-      salvarOffline(payload);
+      await salvarOffline(payload);
+      agendarBackgroundSync();
       setLoading(false);
       btn.disabled=false; btn.textContent='Registrar apontamento';
       mostrarSucesso(payload, true);
@@ -1494,7 +1501,8 @@ async function enviarApontamento() {
     }
   } catch(err) {
     // Falha de rede, timeout ou servidor indisponível — salva localmente
-    salvarOffline(payload);
+    await salvarOffline(payload);
+    agendarBackgroundSync();
     setLoading(false);
     btn.disabled=false; btn.textContent='Registrar apontamento';
     // Mostra tela de sucesso com aviso de offline visível
@@ -1614,48 +1622,13 @@ function limparStep2() {
 }
 
 // ===================== OFFLINE =====================
-const FILA_MAX_TENTATIVAS = 20; // mais tolerante — falhas intermitentes do Apps Script
+// Fix#FilaOffline: salvarOffline, postAPI, verificarFechamentoRegistrado e o núcleo da
+// sincronização (_sincronizarFilaImplCore) agora vivem em agricef-fila-shared.js — carregado
+// ANTES deste script (ver <script src> logo acima do toast), compartilhado com sw.js (Service
+// Worker de Background Sync). Aqui fica só o que é específico da página: UI (badge, toast) e
+// o agendamento de retry em primeiro plano.
 
-function salvarOffline(p){
-  const f=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-  f.push({...p, _tentativas: 0, _salvoEm: new Date().toISOString()});
-  localStorage.setItem('agricef_fila',JSON.stringify(f));
-  atualizarBadgeFila();
-}
-
-function atualizarBadgeFila(){
-  const fila = JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-  let badge = document.getElementById('badgeFila');
-  if(!badge){
-    badge = document.createElement('div');
-    badge.id = 'badgeFila';
-    badge.style.cssText = 'display:none;position:fixed;top:12px;right:12px;z-index:9999;'+
-      'background:#e53935;color:#fff;font-weight:700;font-size:13px;'+
-      'border-radius:8px;padding:8px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)';
-    badge.title = 'Apontamentos pendentes de sincronização — clique para tentar agora';
-    badge.onclick = () => sincronizarFila(true);
-    document.body.appendChild(badge);
-  }
-  if(fila.length > 0){
-    badge.style.display = 'block';
-    badge.textContent = '⚠ ' + fila.length + ' apontamento(s) pendente(s) — toque para sincronizar';
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-// Move um item da fila para falhas permanentes: grava em agricef_falhas, avisa o operador
-// e dispara e-mail de alerta. Usado tanto para esgotamento de tentativas (falha transitória
-// persistente) quanto para rejeição de validação (erro determinístico — reenviar não resolve).
-function _moverParaFalhasPermanentes(item, motivo) {
-  const falhas = JSON.parse(localStorage.getItem('agricef_falhas')||'[]');
-  const itemFalho = {...item, _falhouEm: new Date().toISOString(), _motivo: motivo};
-  falhas.push(itemFalho);
-  localStorage.setItem('agricef_falhas', JSON.stringify(falhas));
-  console.error('AGRICEF: apontamento movido para fila de falhas permanentes —', motivo, item);
-  showToast('⛔ Apontamento de '+item.hora+' não pôde ser registrado ('+motivo+'). Contate o suporte.','error',10000);
-  fetch(API+'?action=notificarFalhaPermanente&item='+encodeURIComponent(JSON.stringify(itemFalho))).catch(()=>{});
-}
+let _filaTemItensCache = false; // resposta síncrona pro beforeunload — IndexedDB é assíncrono
 
 let _sincronizando = false;
 // Promise da sincronização em andamento — permite que outras rotinas (ex.: verificarAbertoSeCompleto)
@@ -1663,153 +1636,112 @@ let _sincronizando = false;
 // Sem isso, uma consulta concorrente pode ler um estado desatualizado (fechamento ainda não sincronizado)
 // e forçar o operador a fechar o mesmo apontamento de novo.
 let _filaSincPromise = null;
-const TIPOS_FECHAMENTO_FILA = ['FECHAMENTO','TERMINO_RETRABALHO','TERMINO_PARADA'];
 function sincronizarFila(manual=false){
   if(_sincronizando) return _filaSincPromise;
   _sincronizando = true;
-  _filaSincPromise = _sincronizarFilaImpl(manual).finally(() => { _sincronizando = false; });
+  const hooks = {
+    onSincronizado: (n) => showToast(n+' apontamento(s) sincronizado(s) com sucesso ✓','success'),
+    onFalhaManual: () => showToast('Servidor indisponível — apontamentos mantidos na fila','error'),
+    onFalhaPermanente: (item, motivo) => showToast('⛔ Apontamento de '+item.hora+' não pôde ser registrado ('+motivo+'). Contate o suporte.','error',10000),
+  };
+  _filaSincPromise = _sincronizarFilaImplCore(manual, hooks)
+    .then(resultado => { atualizarBadgeFila(); return resultado; })
+    .finally(() => { _sincronizando = false; });
   return _filaSincPromise;
 }
-// Identidade estável de um item da fila offline — usa requestId quando presente (itens salvos
-// após a introdução da idempotência); cai para _salvoEm (timestamp ISO com precisão de ms,
-// gerado no momento do salvarOffline) em itens legados que já estavam na fila antes disso.
-function _idItemFila(item) {
-  return item.requestId || item._salvoEm;
+
+// Fix#ReenvioAgressivo: 30s quando a fila está vazia (custo desprezível — só uma leitura do
+// IndexedDB), 10s quando há pendência (detecta falha permanente ~3x mais rápido: chega nas 20
+// tentativas em ~3min em vez de ~10min). Nunca mais rápido que 10s pra não piorar a contenção
+// de lock que já existe no backend em horário de pico (fim de turno).
+let _pollTimeoutId = null;
+function _agendarProximoPoll(temPendencia){
+  clearTimeout(_pollTimeoutId);
+  _pollTimeoutId = setTimeout(async () => {
+    const resultado = await sincronizarFila();
+    _agendarProximoPoll(!!(resultado && resultado.restantes > 0));
+  }, temPendencia ? 10000 : 30000);
 }
 
-async function _sincronizarFilaImpl(manual){
-  const fila=JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-  if(!fila.length){ atualizarBadgeFila(); return; }
-  {
-    // resultados: Map de identidade -> 'sincronizado' | item atualizado (nova contagem de
-    // tentativas) | 'falhou-definitivo'. Cada await postAPI() abaixo pode levar dezenas de
-    // segundos (backend sob carga real) — durante essa janela, um NOVO apontamento pode ser
-    // salvo na fila por salvarOffline() rodando em paralelo (ex: operador envia outro registro
-    // enquanto esta sincronização de 30s ainda está no meio do processamento anterior).
-    // Por isso NÃO escrevemos localStorage com base no snapshot `fila` lido acima — em vez
-    // disso, cada item novo intercalado seria apagado ao sobrescrever com esse snapshot antigo
-    // (exatamente a causa dos apontamentos que "somem" sem erro). Em vez disso, mesclamos por
-    // identidade contra o estado ATUAL do localStorage só no final (ver bloco de escrita abaixo).
-    const resultados = new Map();
-    let sincronizados = 0;
-    for(const item of fila){
-      const id = _idItemFila(item);
-      const tentativas = (item._tentativas || 0) + 1;
-      if (tentativas > FILA_MAX_TENTATIVAS) {
-        // Após N tentativas sem sucesso (falha transitória persistente): move para falhas permanentes
-        _moverParaFalhasPermanentes(item, 'esgotou '+FILA_MAX_TENTATIVAS+' tentativas de reenvio');
-        resultados.set(id, 'remover');
-        continue;
-      }
-      try{
-        const itemSemMeta = {...item};
-        delete itemSemMeta._tentativas;
-        delete itemSemMeta._salvoEm;
-        const d=await postAPI(itemSemMeta);
-        if(d.success){
-          sincronizados++;
-          resultados.set(id, 'remover');
-        } else if (d.jaFechado || (d.jaAberto && d.bloqueado)) {
-          // Este item específico já foi aplicado com sucesso numa tentativa anterior cuja
-          // resposta não chegou ao cliente (retry após falha de rede) — nada a fazer, remove
-          // da fila. Não é erro: é o próprio requestId confirmando idempotência.
-          console.log('AGRICEF: item da fila já havia sido aplicado anteriormente, removendo', item);
-          sincronizados++;
-          resultados.set(id, 'remover');
-        } else if (d.semAberto && TIPOS_FECHAMENTO_FILA.includes(item.tipoApontamento)) {
-          // Servidor não encontrou abertura correspondente para este fechamento — isso pode
-          // significar duas coisas bem diferentes: (a) já foi aplicado numa tentativa anterior
-          // cuja resposta não chegou ao cliente — seguro descartar; ou (b) um erro genuíno
-          // (abertura nunca existiu/foi removida por outro motivo) — descartar sem checar
-          // PERDERIA o apontamento silenciosamente, exatamente o tipo de problema relatado.
-          // Por isso confirma no servidor se a linha de fechamento de fato existe antes de
-          // decidir — nunca assume.
-          const confirmacao = await verificarFechamentoRegistrado(item.abertoId, item.tipoApontamento);
-          if (confirmacao === true) {
-            console.log('AGRICEF: fechamento já aplicado anteriormente (confirmado no servidor), removendo da fila', item);
-            sincronizados++;
-            resultados.set(id, 'remover');
-          } else {
-            // confirmacao === false (genuinamente não registrado) ou null (erro ao verificar,
-            // incerto) — em ambos os casos mantém na fila para não arriscar perda de dado real.
-            console.warn('AGRICEF: fechamento sem abertura correspondente E não confirmado como já registrado — mantendo na fila', item, 'confirmacao:', confirmacao);
-            resultados.set(id, {...item, _tentativas: tentativas});
-          }
-        } else if (d.incompativel || (d.bloqueado && !d.jaAberto)) {
-          // Erro de validação/conflito real (tipo, série, operação ou item incompatível com o
-          // que está de fato aberto no servidor; ou bloqueado por OUTRA abertura genuinamente
-          // diferente) — é uma rejeição determinística, reenviar o mesmo payload nunca vai
-          // funcionar. Manter isso na fila só faria o operador achar que "está sendo
-          // processado" por até 20 tentativas, quando na verdade precisa de correção manual
-          // — exatamente o tipo de apontamento que fica preso silenciosamente. Move direto
-          // para falhas permanentes com o motivo exato em vez de esperar o limite de tentativas.
-          _moverParaFalhasPermanentes(item, d.message || 'rejeitado pelo servidor');
-          resultados.set(id, 'remover');
-        } else {
-          // Falha transitória (rede, timeout, lock ocupado) ou erro não classificado —
-          // mantém na fila para nova tentativa.
-          resultados.set(id, {...item, _tentativas: tentativas});
-        }
-      } catch{
-        resultados.set(id, {...item, _tentativas: tentativas});
-      }
+// Fix#AvisoMaisForte: badge cresce em destaque depois de ~5min pendente — sozinho, um badge
+// pequeno no canto é fácil de não notar; passado esse tempo, cor mais forte + tempo explícito
+// + pulsando. Também atualiza _filaTemItensCache, usado pelo listener de beforeunload.
+async function atualizarBadgeFila(){
+  const fila = await _filaGetAll();
+  _filaTemItensCache = fila.length > 0;
+  let badge = document.getElementById('badgeFila');
+  if(!badge){
+    badge = document.createElement('div');
+    badge.id = 'badgeFila';
+    badge.style.cssText = 'display:none;position:fixed;top:12px;right:12px;z-index:9999;'+
+      'background:#e53935;color:#fff;font-weight:700;font-size:13px;'+
+      'border-radius:8px;padding:8px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);'+
+      'transition:background .3s';
+    badge.title = 'Apontamentos pendentes de sincronização — clique para tentar agora';
+    badge.onclick = () => sincronizarFila(true);
+    document.body.appendChild(badge);
+    if(!document.getElementById('agricefBadgeStyle')){
+      const style = document.createElement('style');
+      style.id = 'agricefBadgeStyle';
+      style.textContent = '@keyframes agricefBadgePulse{0%,100%{opacity:1}50%{opacity:.5}}';
+      document.head.appendChild(style);
     }
-
-    // Merge seguro: relê o estado ATUAL do localStorage (pode ter itens novos adicionados
-    // durante o loop acima) e aplica os resultados por identidade — nunca sobrescreve cego.
-    const filaAtual = JSON.parse(localStorage.getItem('agricef_fila')||'[]');
-    const filaFinal = [];
-    const idsProcessados = new Set(resultados.keys());
-    for (const item of filaAtual) {
-      const id = _idItemFila(item);
-      if (!idsProcessados.has(id)) {
-        filaFinal.push(item); // item novo, intocado por esta sincronização — preserva
-        continue;
-      }
-      const resultado = resultados.get(id);
-      if (resultado !== 'remover') filaFinal.push(resultado); // continua na fila, tentativas atualizadas
-      // 'remover': sincronizado ou movido para falhas permanentes — não entra na fila final
+  }
+  if(fila.length > 0){
+    const maisAntigoTs = fila.reduce((min,it) => {
+      const t = Date.parse(it._salvoEm||'') || Date.now();
+      return (min===null || t<min) ? t : min;
+    }, null);
+    const minutosParado = maisAntigoTs ? Math.floor((Date.now()-maisAntigoTs)/60000) : 0;
+    badge.style.display = 'block';
+    if(minutosParado >= 5){
+      badge.style.background = '#b71c1c';
+      badge.style.animation = 'agricefBadgePulse 1.2s infinite';
+      badge.textContent = '⚠ ' + fila.length + ' pendente(s) há ' + minutosParado + 'min — toque para sincronizar';
+    } else {
+      badge.style.background = '#e53935';
+      badge.style.animation = 'none';
+      badge.textContent = '⚠ ' + fila.length + ' apontamento(s) pendente(s) — toque para sincronizar';
     }
-
-    localStorage.setItem('agricef_fila',JSON.stringify(filaFinal));
-    atualizarBadgeFila();
-    if(sincronizados > 0) showToast(sincronizados+' apontamento(s) sincronizado(s) com sucesso ✓','success');
-    else if(manual && filaFinal.length > 0) showToast('Servidor indisponível — apontamentos mantidos na fila','error');
+  } else {
+    badge.style.display = 'none';
+    badge.style.animation = 'none';
   }
 }
 
-// Retorna true (confirmado registrado), false (confirmado NÃO registrado) ou null (não foi
-// possível confirmar — trata como incerto, nunca como "pode descartar").
-async function verificarFechamentoRegistrado(abertoId, tipo) {
-  if (!abertoId || !tipo) return false;
-  try {
-    const url = API+'?action=verificarFechamentoRegistrado'
-      +'&abertoId='+encodeURIComponent(abertoId)
-      +'&tipo='+encodeURIComponent(tipo);
-    const data = await (await fetch(url)).json();
-    if (data.registrado === true) return true;
-    if (data.registrado === false) return false;
-    return null; // erro no servidor ao verificar — incerto
-  } catch {
-    return null; // falha de rede ao verificar — incerto
-  }
+// Fix#BackgroundSync: registra o Service Worker em qualquer navegador que suporte — inclusive
+// Safari/iOS, que suporta o registro em si desde a versão 11.3 (só falta o SyncManager, que
+// tem feature-detection separada em agendarBackgroundSync abaixo). Escuta mensagens do SW pra
+// mostrar toast mesmo quando a sincronização aconteceu em segundo plano, sem a página ter feito nada.
+function registrarServiceWorker(){
+  if(!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').catch(err => {
+    console.warn('AGRICEF: falha ao registrar Service Worker — Background Sync não disponível nesta sessão', err);
+  });
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    const msg = event.data;
+    if(!msg) return;
+    if(msg.tipo === 'agricef-fila-sincronizada'){
+      showToast(msg.quantidade+' apontamento(s) sincronizado(s) em segundo plano ✓','success');
+      atualizarBadgeFila();
+    } else if(msg.tipo === 'agricef-fila-falha-permanente'){
+      showToast('⛔ Apontamento de '+((msg.item&&msg.item.hora)||'')+' não pôde ser registrado ('+msg.motivo+'). Contate o suporte.','error',10000);
+      atualizarBadgeFila();
+    }
+  });
 }
 
-// ===================== API =====================
-async function postAPI(obj) {
-  // GET com payload na URL — único método que funciona de forma confiável no
-  // Google Apps Script (POST perde o body no redirect 302 em browsers mobile).
-  // _t=timestamp garante que o CDN do Google não sirva resposta cacheada.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 55000); // timeout 55s — GAS lock pode levar até 15s + processamento
+// Feature-detection separada do registro do SW em si — SyncManager não existe no Safari/iOS
+// (não existe workaround via JS pra isso, é restrição da própria plataforma). Nesse caso o
+// reenvio agressivo em primeiro plano (_agendarProximoPoll + visibilitychange) é a única rede
+// de segurança do lado do cliente disponível.
+async function agendarBackgroundSync(){
+  if(!('serviceWorker' in navigator) || !('SyncManager' in window)) return;
   try {
-    const params = new URLSearchParams({ payload: JSON.stringify(obj), _t: Date.now() });
-    const res = await fetch(API + '?' + params.toString(), { signal: controller.signal });
-    const text = await res.text();
-    try { return JSON.parse(text); }
-    catch { throw new Error('Resposta inválida do servidor: ' + text.substring(0,200)); }
-  } finally {
-    clearTimeout(timer);
+    const reg = await navigator.serviceWorker.ready;
+    await reg.sync.register('sync-fila');
+  } catch(e) {
+    // silencioso — o polling em primeiro plano já cobre isso
   }
 }
 
@@ -1973,6 +1905,28 @@ function showToast(msg,type='',durMs=0){
 }
 
 window.addEventListener('online', () => sincronizarFila(true));
+
+// Fix#ReenvioAgressivo: dispara sincronização assim que a aba volta a ficar visível — cobre o
+// caso mais comum de instabilidade (operador saiu e voltou ao app), em qualquer plataforma,
+// inclusive iPhone (onde o Background Sync não existe e este é o único reforço disponível).
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'visible') sincronizarFila();
+});
+
+// Fix#AvisoMaisForte: interrompe o fechamento da aba/app se ainda há apontamento pendente na
+// fila — navegadores modernos ignoram a mensagem customizada, mas ainda mostram o diálogo
+// nativo de confirmação, o que já é suficiente pra chamar atenção antes de um fechamento por
+// descuido. Não cobre fechamento forçado pelo sistema operacional (deslizar o app pra fechar)
+// — nenhuma API web intercepta isso, em nenhuma plataforma. Usa _filaTemItensCache (atualizado
+// a cada atualizarBadgeFila) porque beforeunload precisa de resposta síncrona — não dá pra
+// consultar o IndexedDB (assíncrono) aqui.
+window.addEventListener('beforeunload', (e) => {
+  if(_filaTemItensCache){
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 init();
 </script>
 </body>

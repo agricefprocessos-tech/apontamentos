@@ -74,6 +74,7 @@ const COL_AB = {
   LOTE_SERIES:     11, // JSON de lote de séries
   ABERTO_ID:       12, // abertoId (AP-XXXXXXXXXX)
   IS_LOTE:         13, // 'Sim'/'Não' — identifica explicitamente apontamento em lote
+  ALERTA_ENVIADO_EM: 14, // carimbo de quando o alerta de "aberto há muito tempo" foi enviado (vazio = nunca)
 };
 
 const TIPOS_APONTAMENTO = {
@@ -1772,6 +1773,11 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
       _ehLoteAbertura ? JSON.stringify(payload.loteSeries) : '', // 11 LoteSeries (JSON)
       abertoId || '',                                       // 12 AbertoId — chave de rastreamento
       _ehLoteAbertura ? 'Sim' : 'Não',                     // 13 IsLote — flag explícita (evita heurística de texto)
+      '',                                                    // 14 AlertaEnviadoEm — sempre vazio numa abertura nova.
+      // Fix#AlertaEnviadoStale: sem este elemento explícito, a sobrescrita de linha existente
+      // logo abaixo (getRange(...,novaLinha.length).setValues) só toca as primeiras 14 colunas
+      // e deixaria o AlertaEnviadoEm da linha ANTERIOR (outro abertoId) grudado no abertoId
+      // NOVO, suprimindo um alerta legítimo futuro pro item errado.
     ];
 
     // Verifica por operador (não por série) — um aberto por operador
@@ -1886,6 +1892,7 @@ function getAbertosAction() {
         loteSeries:     loteSeries,
         abertoId:       String(row[12] || ''),
         isLote:         String(row[13] || '') === 'Sim',
+        alertaEnviadoEm: String(row[COL_AB.ALERTA_ENVIADO_EM] || ''),
       });
     }
     return jsonResponse({ success: true, abertos: abertos });
@@ -2113,17 +2120,24 @@ function garantirAbaAbertos(ss) {
   let aba = ss.getSheetByName(ABA_ABERTOS);
   if (!aba) {
     aba = ss.insertSheet(ABA_ABERTOS);
-    const cab = ['Operador','Implemento','Tipo','Operação','Carimbo','CodItem','QtdPlanejada','NrSerie','ImplementoNome','Cliente','OperadorNome','LoteSeries','AbertoId','IsLote'];
+    const cab = ['Operador','Implemento','Tipo','Operação','Carimbo','CodItem','QtdPlanejada','NrSerie','ImplementoNome','Cliente','OperadorNome','LoteSeries','AbertoId','IsLote','AlertaEnviadoEm'];
     aba.appendRow(cab);
     aba.setFrozenRows(1);
     aba.getRange(1,1,1,cab.length).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
     // Formatos de texto definidos apenas na criação — evita chamada custosa a cada requisição
     aba.getRange('A:A').setNumberFormat('@');
     aba.getRange('E:E').setNumberFormat('@'); // carimbo como texto
-  } else if (aba.getLastColumn() < 14) {
-    // Migração leve: planilhas existentes ganham a coluna IsLote sem perder dados
-    aba.getRange(1, 14).setValue('IsLote');
-    aba.getRange(1, 14).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
+  } else {
+    // Migrações leves: planilhas existentes ganham colunas novas sem perder dados.
+    // Não usa "else if" — uma planilha bem antiga (<14 colunas) precisa ganhar as duas.
+    if (aba.getLastColumn() < 14) {
+      aba.getRange(1, 14).setValue('IsLote');
+      aba.getRange(1, 14).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
+    }
+    if (aba.getLastColumn() < 15) {
+      aba.getRange(1, 15).setValue('AlertaEnviadoEm');
+      aba.getRange(1, 15).setFontWeight('bold').setBackground('#1a1a2e').setFontColor('#fff');
+    }
   }
   return aba;
 }
@@ -3163,14 +3177,17 @@ function reconstruirAbertos() {
   // antes de sobrescrevê-la.
   const nomeToCodigoOp = {};
   const abertoIdToLoteSeries = {}; // preserva loteSeries do Abertos antes de reconstruir
+  const abertoIdToAlertaEnviado = {}; // preserva AlertaEnviadoEm — sem isso, todo item "aberto há muito tempo" reenviaria o alerta a cada 30min
   const dadosAbAntes = abaAb.getDataRange().getValues();
   for (let i = 1; i < dadosAbAntes.length; i++) {
     const codAntes      = String(dadosAbAntes[i][0]  || '').trim();
     const nomeAntes     = String(dadosAbAntes[i][10] || '').trim();
     const abertoIdAntes = String(dadosAbAntes[i][12] || '').trim();
     const loteSerAntes  = String(dadosAbAntes[i][11] || '').trim();
+    const alertaAntes   = String(dadosAbAntes[i][COL_AB.ALERTA_ENVIADO_EM] || '').trim();
     if (codAntes && nomeAntes) nomeToCodigoOp[nomeAntes] = codAntes;
     if (abertoIdAntes && loteSerAntes) abertoIdToLoteSeries[abertoIdAntes] = loteSerAntes;
+    if (abertoIdAntes && alertaAntes) abertoIdToAlertaEnviado[abertoIdAntes] = alertaAntes;
   }
 
   // Map: codigoOperador → dados da última abertura em aberto
@@ -3286,6 +3303,7 @@ function reconstruirAbertos() {
         loteSeries:    loteSeriesStr,    // col 11 — recuperado de Respostas col Q ou snapshot Abertos
         abertoId:      abertoIdRe,       // col 12 ← coluna P de Respostas
         isLote:        loteSeriesStr ? 'Sim' : 'Não', // col 13 — deriva do loteSeries sem heurística de texto
+        alertaEnviadoEm: abertoIdToAlertaEnviado[abertoIdRe] || '', // col 14 — preservado do estado anterior
       };
 
     } else if (ehFechamento(tipo) && abertoIdPaiRe) {
@@ -3351,6 +3369,48 @@ function reconstruirAbertos() {
 
   // Monta linhas novas a serem escritas
   const abertos = Object.values(abertosPorOp);
+
+  // Rede de segurança: item aberto além de uma jornada normal (>LIMIAR_HORAS_ABERTO_ALERTA)
+  // vira alerta por e-mail — não depende do celular do operador pra nada, cobre o caso de um
+  // fechamento que nunca chegou a sair do aparelho (ou o operador esqueceu mesmo). Cada item só
+  // alerta uma vez (a.alertaEnviadoEm persiste na planilha entre execuções deste trigger de
+  // 30min); quando o item fecha, some de abertosPorOp na próxima passada e a marca não precisa
+  // de limpeza. Envio embrulhado em try/catch por item — uma falha de cota do MailApp não pode
+  // abortar a checagem dos outros operadores.
+  abertos.forEach(a => {
+    if (a.alertaEnviadoEm) return; // já alertado — não repete
+    const abertoMs = parseCarimboGsMs(a.carimbo);
+    if (isNaN(abertoMs)) return;
+    const horasAberto = (Date.now() - abertoMs) / 3600000;
+    if (horasAberto < LIMIAR_HORAS_ABERTO_ALERTA) return;
+    try {
+      const html =
+        '<div style="font-family:Arial,sans-serif;font-size:14px;color:#333">' +
+        '<h3 style="color:#c0392b">⏰ Apontamento aberto há muito tempo — AGRICEF</h3>' +
+        '<p>Um apontamento continua em aberto há mais de ' + LIMIAR_HORAS_ABERTO_ALERTA + ' horas — ' +
+        'além do que uma jornada normal leva. Pode ser um fechamento que ficou preso no ' +
+        'dispositivo do operador (fila offline) ou algo genuinamente esquecido. Vale confirmar ' +
+        'com o operador.</p>' +
+        '<table style="border-collapse:collapse;margin-top:8px">' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Operador</td><td style="padding:4px 10px">' + (a.operadorNome || a.operador || '—') + '</td></tr>' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Tipo</td><td style="padding:4px 10px">' + (a.tipo || '—') + '</td></tr>' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Série/Implemento</td><td style="padding:4px 10px">' + (a.nrSerie || a.implemento || '—') + '</td></tr>' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Código do item</td><td style="padding:4px 10px">' + (a.codItem || '—') + '</td></tr>' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Aberto em</td><td style="padding:4px 10px">' + a.carimbo + '</td></tr>' +
+        '<tr><td style="padding:4px 10px;font-weight:bold">Tempo aberto</td><td style="padding:4px 10px">' + horasAberto.toFixed(1) + 'h</td></tr>' +
+        '</table>' +
+        '</div>';
+      MailApp.sendEmail({
+        to:       EMAIL_ALERTA_FALHA,
+        subject:  '⏰ AGRICEF | Apontamento aberto há ' + horasAberto.toFixed(0) + 'h — ' + (a.operadorNome || a.operador || ''),
+        htmlBody: html,
+      });
+      a.alertaEnviadoEm = Utilities.formatDate(new Date(), 'GMT-3', 'dd/MM/yyyy HH:mm:ss');
+    } catch (alertErr) {
+      Logger.log('reconstruirAbertos: falha ao enviar alerta de item aberto há muito tempo — ' + alertErr.message);
+    }
+  });
+
   const novasLinhas = abertos.map(a => [
     // Bug#fix3: restaurar código original se disponível (evita corromper col 0 com nome longo)
     nomeToCodigoOp[a.operadorNome] || a.operador,
@@ -3367,6 +3427,7 @@ function reconstruirAbertos() {
     a.loteSeries,
     a.abertoId,
     a.isLote || 'Não',
+    a.alertaEnviadoEm || '',
   ]);
 
   // Limpa Abertos de forma segura:
@@ -3379,17 +3440,17 @@ function reconstruirAbertos() {
   // Se faltam linhas, adiciona linhas em branco para ter espaço
   if (ultimaLinha < numNecessario + 1) {
     const faltam = numNecessario + 1 - ultimaLinha;
-    for (let k = 0; k < faltam; k++) abaAb.appendRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '']);
+    for (let k = 0; k < faltam; k++) abaAb.appendRow(['', '', '', '', '', '', '', '', '', '', '', '', '', '', '']);
   }
 
   // Escreve as novas linhas (ou linha vazia na linha 2 se não houver abertos)
   if (novasLinhas.length > 0) {
-    abaAb.getRange(2, 1, novasLinhas.length, 14).setValues(novasLinhas);
+    abaAb.getRange(2, 1, novasLinhas.length, 15).setValues(novasLinhas);
     // Força formato texto na coluna A (operador)
     abaAb.getRange(2, 1, novasLinhas.length, 1).setNumberFormat('@');
   } else {
     // Sem abertos: apenas limpa linha 2
-    abaAb.getRange(2, 1, 1, 14).clearContent();
+    abaAb.getRange(2, 1, 1, 15).clearContent();
   }
 
   // Remove linhas excedentes (abaixo das novas linhas + 1 em branco obrigatória)
@@ -3940,6 +4001,11 @@ function getAnaliseIAAction() {
 const EMAIL_RELATORIO    = 'guilherme.souza@agricef.com.br,luciano.oliveira@agricef.com.br,cerri@agricef.com.br';
 const EMAIL_ALERTA_FALHA = 'guilherme.souza@agricef.com.br';
 const DIAS_ALERTA_ATRASO = 3; // ordens abertas há mais que isso → alerta vermelho
+// Rede de segurança de reconstruirAbertos — bem mais rápido que o dígest diário acima (que só
+// roda 1x/dia às 7h e só alerta depois de DIAS_ALERTA_ATRASO=3 dias). Jornadas normais fecham
+// em 9-11h pelos dados reais já observados; 12h dá margem sem soar falso positivo num job
+// legítimo de um dia só.
+const LIMIAR_HORAS_ABERTO_ALERTA = 12;
 
 // ---------------------------------------------------------------
 // PONTO DE ENTRADA — chamado pelo trigger ou manualmente
