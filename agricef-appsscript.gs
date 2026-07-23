@@ -817,18 +817,22 @@ function gravarApontamento(payload) {
     } catch(e) { /* CacheService indisponível — prossegue normalmente sem idempotência */ }
   }
 
-  // LockService garante que duas requisições simultâneas não passem juntas pela validação.
-  // 30s (era 20s): lotes com muitas séries + flush duplo precisam de margem maior para não
-  // rejeitar com "ocupado" quando o Sheets está lento.
-  const lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(30000);
-  } catch (lockErr) {
-    // transiente:true — sinaliza ao frontend que é um erro recuperável (servidor ocupado,
-    // não um problema com os dados), para que ele entre na fila de reenvio automático em
-    // vez de só mostrar um erro e depender do operador notar e tentar de novo manualmente.
-    return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
-  }
+  // Opção A (perf): o lock global antigo segurava a validação inteira (leituras de Abertos/
+  // Respostas/Paradas_Aninhadas, checagens de duplicidade/fantasma/B7.4) — a maior parte do
+  // tempo de gravação (14-70s medidos em produção) não era escrita, era essa validação
+  // esperando na fila atrás de outros operadores. Agora: um soft-lock por operador (logo
+  // abaixo da sanitização) protege contra o mesmo operador enviando 2 requisições sobrepostas
+  // (double-tap, ou retry da fila offline colidindo com envio manual) — o único caso real de
+  // corrida aqui, já que abertoId/lote são amarrados ao operador dono. O LockService global de
+  // verdade fica estreitado só em volta da escrita (ver mais abaixo, perto de "linhasGravadas"),
+  // preservando exatamente a mesma proteção que reconstruirAbertos/editarApontamento/etc. já
+  // esperam dele — só que por uma janela muito mais curta.
+  // opKey declarado AQUI FORA (não dentro do try abaixo) — precisa continuar acessível no
+  // finally externo, que libera o lock por operador. Um `const` declarado dentro de um bloco
+  // try{} não é visível no finally{} correspondente (blocos diferentes) — declarar só dentro
+  // teria feito o release no finally lançar ReferenceError, engolido pelo catch(e){} local,
+  // deixando o lock preso pelo TTL inteiro (bug real, pego em teste ao vivo antes de publicar).
+  let opKey = null;
   try {
     const ss    = SpreadsheetApp.openById(SPREADSHEET_ID);
     const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
@@ -884,6 +888,34 @@ function gravarApontamento(payload) {
       payload.loteSeries = payload.loteSeries.map(function(item) {
         return Object.assign({}, item, { nrSerie: _san(item.nrSerie) });
       });
+    }
+
+    // ---------------------------------------------------------------
+    // LOCK POR OPERADOR (Opção A) — evita que o MESMO operador tenha duas requisições
+    // sobrepostas passando juntas pela validação (double-tap, ou fila offline retentando
+    // enquanto um envio manual já está em curso). Operadores DIFERENTES nunca disputam essa
+    // chave, então não esperam um pelo outro. CacheService não tem check-and-set atômico —
+    // por isso o get+put roda dentro de um lock global de verdade, mas só por milissegundos
+    // (não durante a validação inteira), fechando essa janela de corrida.
+    // ---------------------------------------------------------------
+    opKey = 'oplock_' + normalizarCodigoOp(payload.operador || '');
+    let gotOpLock = false;
+    {
+      const briefLock = LockService.getScriptLock();
+      try {
+        briefLock.waitLock(3000);
+        if (!CacheService.getScriptCache().get(opKey)) {
+          CacheService.getScriptCache().put(opKey, '1', 90); // TTL de segurança
+          gotOpLock = true;
+        }
+      } catch (briefLockErr) {
+        return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
+      } finally {
+        briefLock.releaseLock();
+      }
+    }
+    if (!gotOpLock) {
+      return jsonResponse({ success: false, transiente: true, message: 'Aguarde a operação anterior deste operador terminar.' });
     }
 
     const tipo = payload.tipoApontamento;
@@ -993,6 +1025,12 @@ function gravarApontamento(payload) {
     // bug pré-existente: sem isso, o saldo de cada série era calculado com qtdPl/qtdRe do LOTE
     // INTEIRO, não da série específica.
     let loteQtdPorSerieMap = null;
+    // Opção A (perf): abertoId de uma linha fantasma detectada na validação (fora do lock
+    // estreitado). A EXECUÇÃO do delete fica adiada pro trecho de escrita (dentro do lock),
+    // relocalizada por abertoId contra uma releitura fresca de Abertos — nunca deletar por
+    // índice fora do lock, já que reconstruirAbertos (ou outro request) pode ter reordenado
+    // as linhas nesse meio-tempo.
+    let abertoIdFantasma = null;
 
     // ---------------------------------------------------------------
     // VALIDAÇÃO SERVER-SIDE — executada ANTES de qualquer escrita,
@@ -1066,16 +1104,15 @@ function gravarApontamento(payload) {
                 (r, idx) => idx > 0 && String(r[15] || '').trim() === abertoIdExistente
               );
               if (!existeEmRe) {
-                // Fantasma confirmado — remove de Abertos e deixa prosseguir
-                abaAb.deleteRow(i + 1);
-                // Fix#PokaYokeEsquecido: sincroniza o array EM MEMÓRIA com a planilha real.
-                // dadosAbertos foi lido uma única vez no início de gravarApontamento e é
-                // reaproveitado por atualizarAbertos() mais abaixo — sem este splice, esse
-                // array continuaria com a linha fantasma (já removida da planilha), fazendo
-                // atualizarAbertos() operar sobre índices desalinhados com a planilha real
-                // (toda linha abaixo da deletada se desloca uma posição para cima).
+                // Fantasma confirmado — NÃO deleta agora (validação roda fora do lock
+                // estreitado; deletar por índice aqui poderia acertar a linha errada se
+                // reconstruirAbertos reordenar Abertos antes da escrita). Só registra o
+                // abertoId — o delete de verdade acontece dentro do lock, relocalizado.
+                abertoIdFantasma = abertoIdExistente;
+                // Sincroniza o array EM MEMÓRIA (só afeta as decisões desta validação —
+                // dadosAbertos não é mais usado para escrita por índice, ver dadosAbertosFresh).
                 dadosAbertos.splice(i, 1);
-                Logger.log('gravarApontamento [Bug#29]: fantasma removido — op=' +
+                Logger.log('gravarApontamento [Bug#29]: fantasma detectado (delete adiado) — op=' +
                   payload.operador + ', abertoId=' + abertoIdExistente);
                 break; // sai do loop e continua para gravar a nova abertura
               }
@@ -1462,6 +1499,44 @@ function gravarApontamento(payload) {
     ];
 
     let linhasGravadas = 1; // padrão série única; sobrescrito nos paths de lote abaixo
+    // respOk/respStr declarados aqui fora (não dentro do try do lock estreitado abaixo) —
+    // precisam continuar acessíveis depois que esse try fechar, para a persistência durável
+    // de idempotência e o jsonResponse final.
+    let respOk = null, respStr = null;
+
+    // ---------------------------------------------------------------
+    // LOCK GLOBAL (Opção A, estreitado) — a partir daqui até o fim do bloco de saldo parcial
+    // é a ÚNICA parte que precisa de exclusão mútua de verdade entre TODOS os operadores (e
+    // contra reconstruirAbertos/editarApontamento/etc, que seguram o mesmo LockService.getScriptLock()).
+    // Tudo antes disso (validação, checagens de duplicidade/fantasma) já rodou protegido só
+    // pelo lock por operador acima — suficiente porque recursos são amarrados ao operador dono.
+    // ---------------------------------------------------------------
+    const lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(30000);
+    } catch (lockErr) {
+      return jsonResponse({ success: false, transiente: true, message: 'Servidor ocupado. Tente novamente em instantes.' });
+    }
+    try {
+
+    // Releitura fresca de Abertos — dadosAbertos (lido na validação, fora do lock) pode estar
+    // desatualizado se reconstruirAbertos (ou outra operação global) rodou nesse meio-tempo, e
+    // ela reordena as linhas ao reconstruir. Qualquer escrita POR ÍNDICE (atualizarAbertos, o
+    // delete de fantasma adiado) usa dadosAbertosFresh — nunca o snapshot antigo da validação.
+    const dadosAbertosFresh = abaAb.getDataRange().getValues();
+
+    // Executa agora o delete de fantasma detectado (e adiado) na validação, relocalizado por
+    // abertoId contra a leitura fresca — pode já não estar mais lá (reconstruirAbertos já
+    // pode ter limpado), tudo bem, ignora nesse caso.
+    if (abertoIdFantasma) {
+      for (let _iFant = 1; _iFant < dadosAbertosFresh.length; _iFant++) {
+        if (String(dadosAbertosFresh[_iFant][12] || '').trim() === abertoIdFantasma) {
+          abaAb.deleteRow(_iFant + 1);
+          dadosAbertosFresh.splice(_iFant, 1);
+          break;
+        }
+      }
+    }
 
     if (payload.loteSeries && Array.isArray(payload.loteSeries) && payload.loteSeries.length > 0) {
       // Bug#25 fix: todos os itens do lote devem ter nrSerie
@@ -1641,8 +1716,9 @@ function gravarApontamento(payload) {
       const abaParadasAnFechWrite = garantirAbaParadasAninhadas(ss);
       abaParadasAnFechWrite.deleteRow(paradaAninhadaParaFechar.linhaPlanilha);
     } else {
-      // Passa dadosAbertos já lidos — atualizarAbertos não precisa reler a aba
-      atualizarAbertos(abaAb, dadosAbertos, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
+      // Passa dadosAbertosFresh (lido dentro do lock estreitado, não o snapshot da validação) —
+      // atualizarAbertos escreve por ÍNDICE de linha, então precisa do estado mais atual possível.
+      atualizarAbertos(abaAb, dadosAbertosFresh, payload, tipo, tipoFormatado, op1, tipoParada, carimbo, abertoId);
     }
     // Bug#1 fix: força commit imediato para que verificarAberto() leia dados atualizados
     SpreadsheetApp.flush();
@@ -1676,16 +1752,18 @@ function gravarApontamento(payload) {
       if (loteSeriesFechamento && loteSeriesFechamento.length > 0) {
         // LOTE: recalcula saldo APENAS das séries fechadas agora (payload.loteSeries).
         // qtdPlanejadaTotal = planejado do lote inteiro (rastreabilidade/label na tela).
+        // Opção A (perf): recalcularSaldoParcialLote lê/escreve Saldo_Parcial UMA VEZ para
+        // todas as séries do lote, em vez de N leituras+escritas independentes (era a parte
+        // mais pesada dentro do lock num fechamento de lote grande).
         const qtdPlTotalLote = loteSeriesFechamento.reduce((s, x) => s + (Number(x.qtdPlanejada) || 0), 0);
-        for (const item of payload.loteSeries) {
-          const nrSerieItem = String(item.nrSerie || '').trim();
-          if (!nrSerieItem) continue;
-          recalcularSaldoParcial(nrSerieItem, codItemKey, opCod, dadosReFresh, {
-            operadorCod: operadorNormSaldo,
-            qtdPlanejadaTotal: qtdPlTotalLote,
-            isLote: true,
-          });
-        }
+        const itensLoteSaldo = payload.loteSeries
+          .map(item => ({ nrSerie: String(item.nrSerie || '').trim(), codItem: codItemKey, operacao: opCod }))
+          .filter(it => it.nrSerie);
+        recalcularSaldoParcialLote(itensLoteSaldo, dadosReFresh, {
+          operadorCod: operadorNormSaldo,
+          qtdPlanejadaTotal: qtdPlTotalLote,
+          isLote: true,
+        });
       } else {
         // Série única
         const nrSerieKey = String(payload.nrSerie || '').trim();
@@ -1698,14 +1776,29 @@ function gravarApontamento(payload) {
         }
       }
     }
-    const respOk = { success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas };
+    respOk = { success: true, message: 'Apontamento registrado com sucesso', linhasGravadas: linhasGravadas };
     if (abertoId) respOk.abertoId = abertoId; // presente apenas em ABERTURA, util para o cliente nao precisar chamar verificarAberto
-    // Idempotência: persiste resposta em CacheService (rápido) e IdempotencyLog (durável).
-    // CacheService: TTL 6h, sobrevive a restarts mas não a longos períodos de inatividade.
-    // IdempotencyLog: durável, checado como fallback quando CacheService está frio.
+    // Idempotência (parte rápida): persiste em CacheService AINDA dentro do lock estreitado —
+    // fecha a janela de um retry muito rápido do mesmo requestId escapar da resposta cacheada
+    // e cair de novo nas checagens de duplicidade/fantasma (que já não rodam mais sob o lock
+    // global). A escrita durável no IdempotencyLog (mais lenta) fica pra depois de liberar.
     if (reqId) {
-      const respStr = JSON.stringify(respOk);
+      respStr = JSON.stringify(respOk);
       try { CacheService.getScriptCache().put('req_' + reqId, respStr, 21600); } catch(e) {}
+    }
+
+    // Invalida o cache curto de getAbertos (Opção A) — cobre tanto o delete de fantasma quanto
+    // atualizarAbertos acima, os dois pontos desta função que podem ter mudado a aba Abertos.
+    invalidarCacheAbertos();
+
+    } finally {
+      lock.releaseLock();
+    }
+
+    // Fora do lock estreitado: só a persistência durável (fallback de cache frio). Uma
+    // duplicata aqui numa corrida rara é inofensiva — mesmo requestId, mesma resposta já
+    // computada e commitada antes do lock ser liberado acima.
+    if (reqId && respStr) {
       try {
         const abaLog = garantirAbaIdempotencyLog(ss);
         abaLog.appendRow([reqId, respStr, new Date().toISOString()]);
@@ -1717,7 +1810,9 @@ function gravarApontamento(payload) {
     _alertarErroSistema('gravarApontamento', err, 'operador=' + (payload.operador || '') + ', tipo=' + (payload.tipoApontamento || ''));
     return jsonResponse({ success: false, message: err.message });
   } finally {
-    lock.releaseLock();
+    // Libera o lock por operador (adquirido logo após a sanitização, no início da validação).
+    // O lock global estreitado já foi liberado no finally interno, mais acima.
+    try { CacheService.getScriptCache().remove(opKey); } catch(e) {}
   }
 }
 
@@ -1857,13 +1952,27 @@ function atualizarAbertos(aba, dadosAbertos, payload, tipo, tipoFormatado, op1, 
 // GET ABERTOS — lê a aba "Abertos" e retorna os registros abertos
 // Chamado pelo dashboard via ?action=getAbertos
 // ================================================================
+// Opção A (perf): cache curto (30s) — Abertos é pequena (só itens hoje abertos), cabe
+// tranquilamente no limite de ~100KB do CacheService (ao contrário de getData/Respostas, que
+// NÃO cabe e por isso não ganhou cache nesta rodada). Invalidado ativamente em todo ponto que
+// escreve em Abertos (invalidarCacheAbertos, chamado por: atualizarAbertos/delete de fantasma
+// dentro de gravarApontamento, reconstruirAbertos, editarApontamento, desfazerFechamentoAction,
+// removerRegistroPorAbertoId) — o TTL é só uma rede de segurança, não o mecanismo principal.
 function getAbertosAction() {
   try {
+    const cache  = CacheService.getScriptCache();
+    const cached = cache.get('abertos_v1');
+    if (cached) return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+
     const ss  = SpreadsheetApp.openById(SPREADSHEET_ID);
     const aba = ss.getSheetByName(ABA_ABERTOS);
     if (!aba) return jsonResponse({ success: true, abertos: [] });
     const dados = aba.getDataRange().getValues();
-    if (dados.length <= 1) return jsonResponse({ success: true, abertos: [] });
+    if (dados.length <= 1) {
+      const vazio = JSON.stringify({ success: true, abertos: [] });
+      try { cache.put('abertos_v1', vazio, 30); } catch(e) {}
+      return ContentService.createTextOutput(vazio).setMimeType(ContentService.MimeType.JSON);
+    }
     const abertos = [];
     for (let i = 1; i < dados.length; i++) {
       const row = dados[i];
@@ -1895,10 +2004,16 @@ function getAbertosAction() {
         alertaEnviadoEm: String(row[COL_AB.ALERTA_ENVIADO_EM] || ''),
       });
     }
-    return jsonResponse({ success: true, abertos: abertos });
+    const resultado = JSON.stringify({ success: true, abertos: abertos });
+    try { cache.put('abertos_v1', resultado, 30); } catch(e) {}
+    return ContentService.createTextOutput(resultado).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
     return jsonResponse({ success: false, erro: err.message });
   }
+}
+
+function invalidarCacheAbertos() {
+  try { CacheService.getScriptCache().remove('abertos_v1'); } catch(e) {}
 }
 
 function getCadastros() {
@@ -2472,18 +2587,12 @@ function atualizarSaldoParcial(aba, nrSerie, codItem, operacao, qtdPlanejada, qt
 // (pós-edição/remoção) da planilha. Quando fornecido, evita uma releitura completa
 // redundante — usado por editarApontamento e removerRegistroPorAbertoId, que já têm
 // os dados em memória no momento em que chamam esta função.
-function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado, opts) {
-  if (!nrSerie || !codItem) return;
-  const ss      = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const abaSaldo = garantirAbaSaldo(ss);
-  let dadosRe = dadosRePreCarregado;
-  if (!dadosRe) {
-    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
-    if (!abaRe) return;
-    dadosRe = abaRe.getDataRange().getValues();
-  }
-  const codItemNorm = String(codItem).trim();
-
+// Replay puro em memória (nenhuma leitura/escrita de Saldo_Parcial aqui) — extraído de
+// recalcularSaldoParcial pra ser reaproveitado por recalcularSaldoParcialLote sem duplicar a
+// lógica de replay. Reconstrói o saldo de uma chave (NrSerie+CodItem+Operacao) a partir de
+// TODOS os FECHAMENTOs em Respostas, em ordem cronológica — mesma regra de "re-baseia ao
+// zerar" de sempre.
+function _calcularSaldoReplay(nrSerie, codItemNorm, operacao, dadosRe) {
   const eventos = [];
   for (let i = 1; i < dadosRe.length; i++) {
     if (String(dadosRe[i][COL_RE.TIPO] || '').trim() !== 'FECHAMENTO') continue;
@@ -2530,6 +2639,23 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado,
     if (ev.operadorCod) ultimoOperador = ev.operadorCod;
   });
 
+  return { saldo, ultimoCarimbo, ultimoAbertoId, ultimoOperador, baseQtdPlanejada };
+}
+
+function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado, opts) {
+  if (!nrSerie || !codItem) return;
+  const ss      = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaSaldo = garantirAbaSaldo(ss);
+  let dadosRe = dadosRePreCarregado;
+  if (!dadosRe) {
+    const abaRe = ss.getSheetByName(ABA_RESPOSTAS);
+    if (!abaRe) return;
+    dadosRe = abaRe.getDataRange().getValues();
+  }
+  const codItemNorm = String(codItem).trim();
+  const { saldo, ultimoCarimbo, ultimoAbertoId, ultimoOperador, baseQtdPlanejada } =
+    _calcularSaldoReplay(nrSerie, codItemNorm, operacao, dadosRe);
+
   const dadosSaldo = abaSaldo.getDataRange().getValues();
   for (let i = dadosSaldo.length - 1; i >= 1; i--) {
     if (mesmoOperador(dadosSaldo[i][0], nrSerie) && String(dadosSaldo[i][1] || '').trim() === codItemNorm && mesmoOperador(dadosSaldo[i][2], operacao)) {
@@ -2545,6 +2671,66 @@ function recalcularSaldoParcial(nrSerie, codItem, operacao, dadosRePreCarregado,
                        : (baseQtdPlanejada != null ? baseQtdPlanejada : '');
     const isLoteFlag  = (opts && opts.isLote != null) ? (opts.isLote ? 'Sim' : 'Não') : '';
     abaSaldo.appendRow([nrSerie, codItem, operacao, saldo, ultimoCarimbo, ultimoAbertoId, operadorCod, qtdPlTotal, isLoteFlag]);
+  }
+}
+
+// Opção A (perf): versão em lote de recalcularSaldoParcial — lê e escreve Saldo_Parcial UMA
+// VEZ para todas as N séries de um lote, em vez de N leituras+escritas independentes (era a
+// parte mais pesada dentro do lock num fechamento de lote grande). Nunca faz deleteRow dentro
+// de um loop por série contra o mesmo array compartilhado — isso invalidaria o índice da
+// próxima série. Calcula o estado final em memória e escreve tudo de uma vez no final.
+// itens: [{nrSerie, codItem, operacao}, ...]. opts: mesmo formato de recalcularSaldoParcial,
+// aplicado a todas as chaves (correto para o caso real — um fechamento de lote tem o mesmo
+// operadorCod/qtdPlanejadaTotal/isLote pra todas as séries fechadas na mesma chamada).
+function recalcularSaldoParcialLote(itens, dadosReFresh, opts) {
+  if (!Array.isArray(itens) || itens.length === 0) return;
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const abaSaldo = garantirAbaSaldo(ss);
+  const dadosSaldo = abaSaldo.getDataRange().getValues();
+  const numColunas = Math.max(abaSaldo.getLastColumn(), 9);
+
+  const chaves = itens
+    .map(it => ({
+      nrSerie: String(it.nrSerie || '').trim(),
+      codItem: String(it.codItem || '').trim(),
+      operacao: it.operacao,
+    }))
+    .filter(c => c.nrSerie && c.codItem);
+  if (chaves.length === 0) return;
+
+  // Mantém toda linha existente que NÃO pertence a nenhuma das chaves sendo recalculadas.
+  const linhasMantidas = [];
+  for (let i = 1; i < dadosSaldo.length; i++) {
+    const row = dadosSaldo[i];
+    if (!row[0] && !row[1]) continue; // linha vazia
+    const pertence = chaves.some(c =>
+      mesmoOperador(row[0], c.nrSerie) &&
+      String(row[1] || '').trim() === c.codItem &&
+      mesmoOperador(row[2], c.operacao)
+    );
+    if (!pertence) linhasMantidas.push(row);
+  }
+
+  // Calcula (replay puro, em memória — nenhuma I/O aqui) a linha nova de cada chave.
+  const linhasNovas = [];
+  chaves.forEach(c => {
+    const r = _calcularSaldoReplay(c.nrSerie, c.codItem, c.operacao, dadosReFresh);
+    if (r.saldo !== null && r.saldo > 0) {
+      const operadorCod = (opts && opts.operadorCod) || r.ultimoOperador || '';
+      const qtdPlTotal  = (opts && opts.qtdPlanejadaTotal != null) ? opts.qtdPlanejadaTotal
+                         : (r.baseQtdPlanejada != null ? r.baseQtdPlanejada : '');
+      const isLoteFlag  = (opts && opts.isLote != null) ? (opts.isLote ? 'Sim' : 'Não') : '';
+      linhasNovas.push([c.nrSerie, c.codItem, c.operacao, r.saldo, r.ultimoCarimbo, r.ultimoAbertoId, operadorCod, qtdPlTotal, isLoteFlag]);
+    }
+  });
+
+  const linhasFinais = linhasMantidas.concat(linhasNovas);
+  // Reescreve o corpo da aba de uma vez: limpa e escreve o estado final calculado.
+  if (dadosSaldo.length > 1) {
+    abaSaldo.getRange(2, 1, dadosSaldo.length - 1, numColunas).clearContent();
+  }
+  if (linhasFinais.length > 0) {
+    abaSaldo.getRange(2, 1, linhasFinais.length, numColunas).setValues(linhasFinais);
   }
 }
 
@@ -2874,6 +3060,7 @@ function desfazerFechamentoAction(abertoId, key) {
     ];
     abaAb.appendRow(novaLinha);
     abaAb.getRange(abaAb.getLastRow(), 1).setNumberFormat('@');
+    invalidarCacheAbertos(); // Opção A: nova linha em Abertos — invalida o cache curto
 
     return jsonResponse({ success: true, linhasFechamentoRemovidas: linhasFechamentoIdx.length, ehLote: ehLote });
   } catch (err) {
@@ -3483,6 +3670,7 @@ function reconstruirAbertos() {
   }
 
   SpreadsheetApp.flush();
+  invalidarCacheAbertos(); // Opção A: Abertos foi reescrita do zero acima — invalida o cache curto
 
   const msg = 'reconstruirAbertos: ' + registrosAntes + ' antes → ' + abertos.length + ' depois.';
   Logger.log(msg);
@@ -5629,6 +5817,7 @@ function removerRegistroPorAbertoId(idAlvo) {
     }
 
     SpreadsheetApp.flush();
+    if (removidosAb > 0) invalidarCacheAbertos(); // Opção A: invalida o cache curto se Abertos mudou
 
     // Recalcula Saldo_Parcial (do zero, replay) para cada chave afetada pelos FECHAMENTOs removidos.
     // Passa dadosRePosRemocao (já em memória, já sem as linhas removidas) — evita reler a planilha.
@@ -5875,6 +6064,7 @@ function editarApontamento(payload) {
     }
 
     SpreadsheetApp.flush();
+    if (abertosSincronizado) invalidarCacheAbertos(); // Opção A: invalida o cache curto se Abertos mudou
 
     // ---------------------------------------------------------------
     // RECALCULA Saldo_Parcial (só se o registro editado for um FECHAMENTO)
